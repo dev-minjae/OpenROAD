@@ -50,6 +50,8 @@ static bool isCoreAreaOverlap(Die& die, Instance& inst);
 
 static int64_t getOverlapWithCoreArea(Die& die, Instance& inst);
 
+static bool isNetIntersected(dbNet* net);
+
 ////////////////////////////////////////////////////////
 // Instance
 
@@ -70,7 +72,7 @@ Instance::Instance(odb::dbInst* db_inst,
 
   if (db_inst->getMaster()->getType().isBlock()) {
     is_macro_ = true;
-  } else if (bbox->getDY() > row_limit * pbc->siteSizeY()) {
+  } else if (bbox->getDY() > row_limit * pbc->siteSizeY(db_inst->getBlock())) {
     is_macro_ = true;
     logger->warn(GPL,
                  134,
@@ -107,8 +109,8 @@ void Instance::copyDbLocation(PlacerBaseCommon* pbc)
   uy_ = ly_ + bbox->getDY();
 
   if (isPlaceInstance()) {
-    lx_ -= pbc->getPadLeft() * pbc->siteSizeX();
-    ux_ += pbc->getPadRight() * pbc->siteSizeX();
+    lx_ -= pbc->getPadLeft() * pbc->siteSizeX(inst_->getBlock());
+    ux_ += pbc->getPadRight() * pbc->siteSizeX(inst_->getBlock());
   }
 }
 
@@ -553,9 +555,10 @@ Pin::~Pin()
 
 Net::Net() = default;
 
-Net::Net(odb::dbNet* net, bool skipIoMode) : Net()
+Net::Net(odb::dbNet* net, bool skipIoMode, bool intersected) : Net()
 {
   net_ = net;
+  intersected_ = intersected;
   updateBox(skipIoMode);
 }
 
@@ -638,6 +641,11 @@ void Net::addPin(Pin* pin)
 odb::dbSigType Net::getSigType() const
 {
   return net_->getSigType();
+}
+
+bool Net::isIntersected() const
+{
+  return intersected_;
 }
 
 ////////////////////////////////////////////////////////
@@ -757,16 +765,6 @@ void PlacerBaseCommon::init()
   dbBlock* block = db_->getChip()->getBlock();
 
   // die-core area update
-  odb::dbSite* db_site = nullptr;
-  for (auto* row : block->getRows()) {
-    if (row->getSite()->getClass() != odb::dbSiteClass::PAD) {
-      db_site = row->getSite();
-      break;
-    }
-  }
-  if (db_site == nullptr) {
-    log_->error(GPL, 305, "Unable to find a site");
-  }
   odb::Rect core_rect = block->getCoreArea();
   odb::Rect die_rect = block->getDieArea();
 
@@ -777,6 +775,33 @@ void PlacerBaseCommon::init()
   die_ = Die(die_rect, core_rect);
 
   // siteSize update
+  odb::dbSite* db_site = nullptr;
+  for (auto* row : block->getRows()) {
+    if (row->getSite()->getClass() != odb::dbSiteClass::PAD) {
+      db_site = row->getSite();
+      blockSiteMap_[block] = db_site;
+      break;
+    }
+  }
+  if (db_site == nullptr) {
+    log_->error(GPL, 305, "Unable to find a site");
+  }
+
+  // Collect sites from child blocks (multi-die)
+  for (auto* child_block : block->getChildren()) {
+    odb::dbSite* child_site = nullptr;
+    for (auto* row : child_block->getRows()) {
+      if (row->getSite()->getClass() != odb::dbSiteClass::PAD) {
+        child_site = row->getSite();
+        blockSiteMap_[child_block] = child_site;
+        break;
+      }
+    }
+    if (child_site == nullptr) {
+      log_->error(GPL, 307, "Unable to find a site for child block");
+    }
+  }
+
   siteSizeX_ = db_site->getWidth();
   siteSizeY_ = db_site->getHeight();
 
@@ -795,11 +820,25 @@ void PlacerBaseCommon::init()
              block->dbuToMicrons(die_.coreUx()),
              block->dbuToMicrons(die_.coreUy()));
 
+  // Collect all instances from top block and child blocks
+  std::vector<dbInst*> all_db_insts;
+  for (dbInst* inst : block->getInsts()) {
+    all_db_insts.push_back(inst);
+  }
+  for (auto* child_block : block->getChildren()) {
+    for (dbInst* inst : child_block->getInsts()) {
+      all_db_insts.push_back(inst);
+    }
+  }
+
   // insts fill with real instances
-  dbSet<dbInst> db_insts = block->getInsts();
-  instStor_.reserve(db_insts.size());
-  insts_.reserve(instStor_.size());
-  for (dbInst* db_inst : db_insts) {
+  instStor_.reserve(all_db_insts.size());
+  for (dbInst* db_inst : all_db_insts) {
+    // Skip instances that represent child blocks
+    if (db_inst->getChild()) {
+      continue;
+    }
+
     auto type = db_inst->getMaster()->getType();
     if (!type.isCore() && !type.isBlock()) {
       continue;
@@ -824,7 +863,9 @@ void PlacerBaseCommon::init()
     // boundary.  A partially overlapped site is unusable and this
     // is the simplest way to ensure it is counted as fully used.
     if (temp_inst.isFixed()) {
-      temp_inst.snapOutward(core_rect.ll(), siteSizeX_, siteSizeY_);
+      int snap_site_x = siteSizeX(db_inst->getBlock());
+      int snap_site_y = siteSizeY(db_inst->getBlock());
+      temp_inst.snapOutward(core_rect.ll(), snap_site_x, snap_site_y);
     }
 
     instStor_.push_back(temp_inst);
@@ -924,28 +965,69 @@ void PlacerBaseCommon::init()
     }
   }
 
+  // Collect all nets from top block and child blocks
+  std::vector<dbNet*> all_db_nets;
+  for (dbNet* net : block->getNets()) {
+    all_db_nets.push_back(net);
+  }
+  for (auto* child_block : block->getChildren()) {
+    for (dbNet* net : child_block->getNets()) {
+      // For multi-die: skip intersected nets in child blocks
+      // (they are already represented in the top block)
+      if (isNetIntersected(net)) {
+        continue;
+      }
+      all_db_nets.push_back(net);
+    }
+  }
+
   // nets fill
-  dbSet<dbNet> db_nets = block->getNets();
-  netStor_.reserve(db_nets.size());
-  for (dbNet* db_net : db_nets) {
+  netStor_.reserve(all_db_nets.size());
+  for (dbNet* db_net : all_db_nets) {
     dbSigType net_type = db_net->getSigType();
 
     // escape nets with VDD/VSS/reset nets
     if (net_type == dbSigType::SIGNAL || net_type == dbSigType::CLOCK) {
-      Net temp_net(db_net, pbVars_.skipIoMode);
+      Net temp_net(db_net, pbVars_.skipIoMode, isNetIntersected(db_net));
       netStor_.push_back(temp_net);
 
       // this is safe because of "reserve"
       Net* temp_net_ptr = &netStor_[netStor_.size() - 1];
       netMap_[db_net] = temp_net_ptr;
 
+      // Parse instance terminals
       for (dbITerm* iTerm : db_net->getITerms()) {
+        // Skip terminals on instances representing child blocks
+        if (iTerm->getInst()->getChild()) {
+          continue;
+        }
         Pin temp_pin(iTerm);
         temp_pin.setNet(temp_net_ptr);
         temp_pin.setInstance(dbToPb(iTerm->getInst()));
         pinStor_.push_back(temp_pin);
       }
 
+      // For intersected nets: traverse into child block terminals
+      if (temp_net_ptr->isIntersected()) {
+        for (dbITerm* iTerm : db_net->getITerms()) {
+          if (!iTerm->getInst()->getChild()) {
+            continue;
+          }
+          // Follow: top iTerm -> bTerm -> child net -> child iTerms
+          dbNet* child_net = iTerm->getBTerm()->getNet();
+          if (!child_net) {
+            continue;
+          }
+          for (dbITerm* child_iTerm : child_net->getITerms()) {
+            Pin temp_pin(child_iTerm);
+            temp_pin.setNet(temp_net_ptr);
+            temp_pin.setInstance(dbToPb(child_iTerm->getInst()));
+            pinStor_.push_back(temp_pin);
+          }
+        }
+      }
+
+      // Parse block terminals
       if (!pbVars_.skipIoMode) {
         for (dbBTerm* bTerm : db_net->getBTerms()) {
           Pin temp_pin(bTerm, log_);
@@ -989,7 +1071,17 @@ void PlacerBaseCommon::init()
   nets_.reserve(netStor_.size());
   for (auto& pb_net : netStor_) {
     for (dbITerm* iTerm : pb_net.getDbNet()->getITerms()) {
-      pb_net.addPin(dbToPb(iTerm));
+      if (iTerm->getInst()->getChild()) {
+        // For intersected top-level net: follow into child block iTerms
+        dbNet* child_net = iTerm->getBTerm()->getNet();
+        if (child_net) {
+          for (dbITerm* child_iTerm : child_net->getITerms()) {
+            pb_net.addPin(dbToPb(child_iTerm));
+          }
+        }
+      } else {
+        pb_net.addPin(dbToPb(iTerm));
+      }
     }
     if (!pbVars_.skipIoMode) {
       for (dbBTerm* bTerm : pb_net.getDbNet()->getBTerms()) {
@@ -1062,6 +1154,24 @@ void PlacerBaseCommon::unlockAll()
   }
 }
 
+int PlacerBaseCommon::siteSizeX(odb::dbBlock* block) const
+{
+  auto it = blockSiteMap_.find(block);
+  if (it != blockSiteMap_.end()) {
+    return static_cast<int>(it->second->getWidth());
+  }
+  return siteSizeX_;
+}
+
+int PlacerBaseCommon::siteSizeY(odb::dbBlock* block) const
+{
+  auto it = blockSiteMap_.find(block);
+  if (it != blockSiteMap_.end()) {
+    return static_cast<int>(it->second->getHeight());
+  }
+  return siteSizeY_;
+}
+
 ////////////////////////////////////////////////////////
 // PlacerBase
 
@@ -1071,12 +1181,14 @@ PlacerBase::PlacerBase(odb::dbDatabase* db,
                        std::shared_ptr<PlacerBaseCommon> pbCommon,
                        utl::Logger* log,
                        bool check_density,
+                       odb::dbBlock* block,
                        odb::dbGroup* group)
     : PlacerBase()
 {
   db_ = db;
   log_ = log;
   pbCommon_ = std::move(pbCommon);
+  block_ = block ? block : db_->getChip()->getBlock();
   group_ = group;
   log_->info(GPL,
              32,
@@ -1113,9 +1225,9 @@ void PlacerBase::init(bool check_density)
     region_area_ = die_.coreArea();
   }
 
-  // siteSize update
-  siteSizeX_ = pbCommon_->siteSizeX();
-  siteSizeY_ = pbCommon_->siteSizeY();
+  // siteSize update (block-aware for multi-die)
+  siteSizeX_ = pbCommon_->siteSizeX(block_);
+  siteSizeY_ = pbCommon_->siteSizeY(block_);
 
   for (auto& inst : pbCommon_->getInsts()) {
     if (!inst->isInstance()) {
@@ -1124,6 +1236,11 @@ void PlacerBase::init(bool check_density)
 
     odb::dbInst* db_inst = inst->dbInst();
     if (!db_inst) {
+      continue;
+    }
+
+    // Filter by block for multi-die support
+    if (db_inst->getBlock() != block_) {
       continue;
     }
 
@@ -1189,7 +1306,7 @@ void PlacerBase::init(bool check_density)
 // due to fragmented rows or placement blockages.
 void PlacerBase::initInstsForUnusableSites()
 {
-  dbSet<dbRow> rows = db_->getChip()->getBlock()->getRows();
+  dbSet<dbRow> rows = block_->getRows();
 
   int64_t siteCountX = (die_.coreUx() - die_.coreLx()) / siteSizeX_;
   int64_t siteCountY = (die_.coreUy() - die_.coreLy()) / siteSizeY_;
@@ -1231,7 +1348,7 @@ void PlacerBase::initInstsForUnusableSites()
     }
 
     // Mark sites intersecting with any region as Blocked
-    for (auto* group : db_->getChip()->getBlock()->getGroups()) {
+    for (auto* group : block_->getGroups()) {
       if (group->getRegion()) {
         auto boundaries = group->getRegion()->getBoundaries();
         for (auto boundary : boundaries) {
@@ -1262,7 +1379,7 @@ void PlacerBase::initInstsForUnusableSites()
   }
 
   // Mark blockage areas as Blocked so that their sites will be blocked.
-  for (dbBlockage* blockage : db_->getChip()->getBlock()->getBlockages()) {
+  for (dbBlockage* blockage : block_->getBlockages()) {
     dbInst* inst = blockage->getInstance();
     if (inst && !inst->isFixed()) {
       std::string msg
@@ -1544,6 +1661,12 @@ static int64_t getOverlapWithCoreArea(Die& die, Instance& inst)
       rectUy = std::min(die.coreUy(), inst.uy());
   return static_cast<int64_t>(rectUx - rectLx)
          * static_cast<int64_t>(rectUy - rectLy);
+}
+
+static bool isNetIntersected(dbNet* net)
+{
+  auto property = odb::dbBoolProperty::find(net, "intersected");
+  return property != nullptr && property->getValue();
 }
 
 }  // namespace gpl

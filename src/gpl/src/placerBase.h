@@ -16,12 +16,14 @@
 namespace odb {
 class dbDatabase;
 
+class dbBlock;
 class dbBTerm;
 class dbGroup;
 class dbITerm;
 class dbInst;
 class dbNet;
 class dbObject;
+class dbSite;
 
 class dbPlacementStatus;
 class dbSigType;
@@ -195,7 +197,7 @@ class Net
 {
  public:
   Net();
-  Net(odb::dbNet* net, bool skipIoMode);
+  Net(odb::dbNet* net, bool skipIoMode, bool intersected = false);
   ~Net();
 
   int lx() const;
@@ -217,6 +219,9 @@ class Net
 
   void addPin(Pin* pin);
 
+  // For multi-die: whether this net crosses die boundaries
+  bool isIntersected() const;
+
  private:
   odb::dbNet* net_ = nullptr;
   std::vector<Pin*> pins_;
@@ -224,6 +229,7 @@ class Net
   int ly_ = 0;
   int ux_ = 0;
   int uy_ = 0;
+  bool intersected_ = false;
 };
 
 class Die
@@ -305,6 +311,10 @@ class PlacerBaseCommon
   int siteSizeX() const { return siteSizeX_; }
   int siteSizeY() const { return siteSizeY_; }
 
+  // Block-aware site size for multi-die support
+  int siteSizeX(odb::dbBlock* block) const;
+  int siteSizeY(odb::dbBlock* block) const;
+
   int getPadLeft() const { return pbVars_.padLeft; }
   int getPadRight() const { return pbVars_.padRight; }
   bool isSkipIoMode() const { return pbVars_.skipIoMode; }
@@ -341,6 +351,9 @@ class PlacerBaseCommon
   boost::unordered::unordered_flat_map<odb::dbObject*, Pin*> pinMap_;
   boost::unordered::unordered_flat_map<odb::dbNet*, Net*> netMap_;
 
+  // Per-block site mapping for multi-die support
+  std::unordered_map<odb::dbBlock*, odb::dbSite*> blockSiteMap_;
+
   int siteSizeX_ = 0;
   int siteSizeY_ = 0;
 
@@ -359,6 +372,7 @@ class PlacerBase
              std::shared_ptr<PlacerBaseCommon> pbCommon,
              utl::Logger* log,
              bool check_density,
+             odb::dbBlock* block = nullptr,
              odb::dbGroup* group = nullptr);
   ~PlacerBase();
 
@@ -393,6 +407,7 @@ class PlacerBase
 
   odb::dbDatabase* db() const { return db_; }
   odb::dbGroup* getGroup() const { return group_; }
+  odb::dbBlock* getBlock() const { return block_; }
 
   void unlockAll();
 
@@ -426,6 +441,7 @@ class PlacerBase
   int64_t stdInstsArea_ = 0;
 
   std::shared_ptr<PlacerBaseCommon> pbCommon_;
+  odb::dbBlock* block_ = nullptr;
   odb::dbGroup* group_ = nullptr;
 
   void init(bool check_density);

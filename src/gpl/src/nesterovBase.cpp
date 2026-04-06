@@ -847,10 +847,7 @@ void BinGrid::updateBinsNonPlaceArea()
         // See MS-replace paper
         //
         bin.addNonPlaceArea(
-            getOverlapArea(
-                &bin,
-                inst,
-                pb_->db()->getChip()->getBlock()->getDbUnitsPerMicron())
+            getOverlapArea(&bin, inst, pb_->getBlock()->getDbUnitsPerMicron())
             * bin.getTargetDensity());
         bin.addNonPlaceAreaUnscaled(getOverlapAreaUnscaled(&bin, inst)
                                     * bin.getTargetDensity());
@@ -1478,9 +1475,10 @@ void NesterovBaseCommon::updateDbGCells()
         db_inst->setPlacementStatus(odb::dbPlacementStatus::PLACED);
 
         // pad awareness on X coordinates
-        db_inst->setLocation(gCell->dCx() - inst->dx() / 2
-                                 + pbc_->siteSizeX() * pbc_->getPadLeft(),
-                             gCell->dCy() - inst->dy() / 2);
+        db_inst->setLocation(
+            gCell->dCx() - inst->dx() / 2
+                + pbc_->siteSizeX(db_inst->getBlock()) * pbc_->getPadLeft(),
+            gCell->dCy() - inst->dy() / 2);
       }
     }
   }
@@ -1903,7 +1901,7 @@ NesterovBase::NesterovBase(
   stdInstsArea_ = pb_->stdInstsArea();
   macroInstsArea_ = pb_->macroInstsArea();
 
-  int dbu_per_micron = pb_->db()->getChip()->getBlock()->getDbUnitsPerMicron();
+  int dbu_per_micron = pb_->getBlock()->getDbUnitsPerMicron();
 
   // update gFillerCells
   initFillerGCells();
