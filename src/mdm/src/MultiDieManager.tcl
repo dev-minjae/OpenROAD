@@ -78,3 +78,53 @@ proc set_mdm_partition_file { args } {
   }
   mdm::set_mdm_partition_file $keys(-file)
 }
+
+sta::define_cmd_args "get_3d_hpwl" {[-exact]}
+
+proc get_3d_hpwl { args } {
+  sta::parse_key_args "get_3d_hpwl" args \
+    keys {} flags {-exact}
+
+  set approximate true
+  if { [info exists flags(-exact)] } {
+    set approximate false
+  }
+  mdm::get_3d_hpwl $approximate
+}
+
+sta::define_cmd_args "get_hpwl" {[-die die]}
+
+proc get_hpwl { args } {
+  sta::parse_key_args "get_hpwl" args \
+    keys {-die} flags {}
+
+  set die ""
+  if { [info exists keys(-die)] } {
+    set die $keys(-die)
+  }
+  mdm::get_hpwl $die
+}
+
+sta::define_cmd_args "export_inst_coordinates" {[-file file]}
+
+proc export_inst_coordinates { args } {
+  sta::parse_key_args "export_inst_coordinates" args \
+    keys {-file} flags {}
+
+  if { ![info exists keys(-file)] } {
+    utl::error MDM 106 "-file is required."
+  }
+  mdm::export_coordinates $keys(-file)
+}
+
+sta::define_cmd_args "import_inst_coordinates" {[-file file]}
+
+proc import_inst_coordinates { args } {
+  sta::parse_key_args "import_inst_coordinates" args \
+    keys {-file} flags {}
+
+  if { ![info exists keys(-file)] } {
+    utl::error MDM 107 "-file is required."
+  }
+  mdm::import_coordinates $keys(-file)
+}

@@ -8,6 +8,9 @@
 
 namespace odb {
 class dbDatabase;
+class dbBlock;
+class dbInst;
+class dbNet;
 }  // namespace odb
 
 namespace utl {
@@ -34,7 +37,10 @@ class MultiDieManager
   utl::Logger* getLogger() const { return logger_; }
   gpl::Replace* getReplace() const { return replace_; }
 
-  // 3D IC configuration.
+  // 3D IC configuration. Calling set3DIC triggers splitInstances: read the
+  // partition file (or fall back to a half/half split), create child blocks
+  // per die, move instances into the assigned dies, and wire intersected
+  // nets between them.
   void set3DIC(int number_of_die, float area_ratio = 0.5);
   int getNumberOfDie() const { return number_of_die_; }
   void setNumberOfDie(int n) { number_of_die_ = n; }
@@ -49,8 +55,23 @@ class MultiDieManager
   // Partitioning.
   void setPartitionFile(const std::string& path) { partition_file_ = path; }
   const std::string& getPartitionFile() const { return partition_file_; }
+  void readPartitionInfo(const std::string& path);
+
+  // Utilities.
+  void get3DHPWL(bool approximate = true);
+  void getHPWL(const char* die_info = nullptr);
+  void exportCoordinates(const std::string& file_name);
+  void importCoordinates(const std::string& file_name);
 
  private:
+  void splitInstances();
+  void makeSubBlocks();
+  void switchInstancesToAssignedDie();
+  void makeInterconnections(odb::dbBlock* lower_block,
+                            odb::dbBlock* upper_block);
+  void makeIOPinInterconnections();
+  void inheritRows(odb::dbBlock* parent_block, odb::dbBlock* child_block);
+
   odb::dbDatabase* db_ = nullptr;
   utl::Logger* logger_ = nullptr;
   gpl::Replace* replace_ = nullptr;
@@ -61,6 +82,17 @@ class MultiDieManager
   std::string partition_file_;
 
   std::unique_ptr<TestCaseManager> test_case_manager_;
+};
+
+// SwitchInstanceHelper moves an instance from the top hierarchical block to
+// the child block matching its partition_id property. The helper preserves
+// placement status, net connectivity (creating nets on the child as needed),
+// arbitrary dbProperty values, and group assignments.
+class SwitchInstanceHelper
+{
+ public:
+  static void switchInstanceToAssignedDie(MultiDieManager* manager,
+                                          odb::dbInst* original_inst);
 };
 
 }  // namespace mdm

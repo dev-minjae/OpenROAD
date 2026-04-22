@@ -57,4 +57,28 @@ set_mdm_partition_file(const std::string& path)
   getMultiDieManager()->setPartitionFile(path);
 }
 
+void
+get_3d_hpwl(bool approximate = true)
+{
+  getMultiDieManager()->get3DHPWL(approximate);
+}
+
+void
+get_hpwl(const std::string& die_info = "")
+{
+  getMultiDieManager()->getHPWL(die_info.empty() ? nullptr : die_info.c_str());
+}
+
+void
+export_coordinates(const std::string& file_name)
+{
+  getMultiDieManager()->exportCoordinates(file_name);
+}
+
+void
+import_coordinates(const std::string& file_name)
+{
+  getMultiDieManager()->importCoordinates(file_name);
+}
+
 %}  // inline
