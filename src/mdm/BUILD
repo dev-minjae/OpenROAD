@@ -16,6 +16,8 @@ cc_library(
     srcs = [
         "src/MakeMultiDieManager.cpp",
         "src/MultiDieManager.cpp",
+        "src/TestCaseManager.cpp",
+        "src/TestCaseManager.h",
         ":swig",
         ":tcl",
     ],

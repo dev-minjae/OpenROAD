@@ -13,6 +13,7 @@ target_sources(mdm
   PRIVATE
     src/MakeMultiDieManager.cpp
     src/MultiDieManager.cpp
+    src/TestCaseManager.cpp
 )
 
 messages(TARGET mdm)
