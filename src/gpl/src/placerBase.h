@@ -222,6 +222,13 @@ class Net
   // For multi-die: whether this net crosses die boundaries
   bool isIntersected() const;
 
+  // Extra scalar multiplier applied to this net's wirelength gradient. For
+  // multi-die placement this is driven by Replace::PlaceOptions::
+  // intersectedNetWeight so that nets crossing a die boundary can be
+  // prioritised (the ICCAD 2022 golden setting is 1.5).
+  float getIntersectedWeight() const { return intersected_weight_; }
+  void setIntersectedWeight(float w) { intersected_weight_ = w; }
+
  private:
   odb::dbNet* net_ = nullptr;
   std::vector<Pin*> pins_;
@@ -230,6 +237,7 @@ class Net
   int ux_ = 0;
   int uy_ = 0;
   bool intersected_ = false;
+  float intersected_weight_ = 1.0f;
 };
 
 class Die
@@ -327,6 +335,12 @@ class PlacerBaseCommon
   odb::dbDatabase* db() const { return db_; }
 
   void unlockAll();
+
+  // Assign a per-net wirelength multiplier to every intersected net (nets
+  // that cross a die boundary in a multi-die design). The NesterovBase will
+  // copy this value into GNet::customWeight_ so that HPWL gradients for
+  // intersected nets are scaled by `w`.
+  void applyIntersectedNetWeight(float w);
 
  private:
   odb::dbDatabase* db_ = nullptr;

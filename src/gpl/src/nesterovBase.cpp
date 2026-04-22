@@ -306,11 +306,24 @@ void GCell::writeAttributesToCSV(std::ostream& out) const
 GNet::GNet(Net* net)
 {
   nets_.push_back(net);
+  // For multi-die designs, inherit the per-net wirelength multiplier
+  // assigned by Replace::initNesterovPlace via
+  // PlacerBaseCommon::applyIntersectedNetWeight so that intersected nets'
+  // HPWL gradients are scaled during Nesterov optimisation.
+  if (net->isIntersected()) {
+    customWeight_ = net->getIntersectedWeight();
+  }
 }
 
 GNet::GNet(const std::vector<Net*>& nets)
 {
   nets_ = nets;
+  for (auto* n : nets_) {
+    if (n->isIntersected()) {
+      customWeight_ = n->getIntersectedWeight();
+      break;
+    }
+  }
 }
 
 Net* GNet::getPbNet() const

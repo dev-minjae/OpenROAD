@@ -75,6 +75,10 @@ struct PlaceOptions
   int binGridCntX = 0;
   int binGridCntY = 0;
   float density = 0.7;
+  // Per-net multiplier applied to nets that cross die boundaries in a
+  // multi-die design. 1.0 (default) preserves single-die behaviour; 1.5
+  // reproduces the ICCAD 2022 tuning record's best setting.
+  float intersectedNetWeight = 1.0;
 
   float routabilityCheckOverflow = 0.3;
   float routabilitySnapshotOverflow = 0.6;

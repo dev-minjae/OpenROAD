@@ -317,6 +317,17 @@ void TestCaseManager::constructDB(MultiDieManager* mdm)
   dbTech* tech_top = dbTech::create(db, "Die1Tech");
   dbTech* tech_bottom = dbTech::create(db, "Die2Tech");
 
+  // ICCAD 2022 contest text has no LEF units; pick a DBU-per-micron that
+  // matches the scale factor applied to every dimension in constructDB so
+  // dbuToMicrons and tool-side micron printing stay finite.
+  const int dbu = std::max(1, scale_);
+  for (dbTech* t : {tech_top_hier, tech_top, tech_bottom}) {
+    t->setLefUnits(dbu);
+  }
+  // The DBU-per-micron now lives on the dbDatabase itself (dbTech forwards
+  // the query). Set it so dbBlock::dbuToMicrons stays finite.
+  db->setDbuPerMicron(dbu);
+
   dbTechLayer* layer_top_hier = dbTechLayer::create(
       tech_top_hier, "layer", dbTechLayerType::MASTERSLICE);
   dbTechLayer* layer_top
@@ -354,6 +365,8 @@ void TestCaseManager::constructDB(MultiDieManager* mdm)
                     top_die->upper_right_y * scale_);
   Rect die_area(lower_left, upper_right);
   block_top_hier->setDieArea(die_area);
+  // ICCAD 2022 benchmarks have no separate core; the whole die is usable.
+  block_top_hier->setCoreArea(die_area);
 
   // Top-hier rows. Child-block rows are built later by rowConstruction().
   dbSite* site = dbSite::create(lib_top_hier, "Site");
