@@ -99,6 +99,7 @@ OPENROAD_LIBRARY_DEPS = [
     "//src/fin",
     "//src/gpl",
     "//src/grt",
+    "//src/mdm",
     "//src/grt:ui",
     "//src/ifp",
     "//src/ifp:ui",

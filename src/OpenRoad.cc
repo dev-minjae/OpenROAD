@@ -50,6 +50,8 @@
 #include "grt/MakeGlobalRouter.h"
 #include "gui/MakeGui.h"
 #include "ifp/MakeInitFloorplan.hh"
+#include "mdm/MakeMultiDieManager.h"
+#include "mdm/MultiDieManager.h"
 #include "mpl/MakeMacroPlacer.h"
 #include "mpl/rtl_mp.h"
 #include "odb/3dblox.h"
@@ -134,6 +136,7 @@ OpenRoad::~OpenRoad()
   delete example_;
   delete extractor_;
   delete detailed_router_;
+  delete multi_die_manager_;
   delete replace_;
   delete pdnsim_;
   delete finale_;
@@ -244,6 +247,7 @@ void OpenRoad::init(Tcl_Interp* tcl_interp,
   drt::initGui(detailed_router_);
 
   replace_ = new gpl::Replace(db_, sta_, resizer_, global_router_, logger_);
+  multi_die_manager_ = new mdm::MultiDieManager(db_, logger_, replace_);
   pdnsim_ = new psm::PDNSim(logger_, db_, sta_, estimate_parasitics_, opendp_);
   pdngen_ = new pdn::PdnGen(db_, logger_);
   ram_gen_ = new ram::RamGen(getDbNetwork(),
@@ -276,6 +280,7 @@ void OpenRoad::init(Tcl_Interp* tcl_interp,
   ppl::initIoplacer(tcl_interp);
   gpl::initReplace(tcl_interp);
   gpl::initReplaceGraphics(replace_, logger_);
+  mdm::initMultiDieManager(tcl_interp);
   dpl::initOpendp(tcl_interp);
   fin::initFinale(tcl_interp);
   ram::initRamGen(tcl_interp);

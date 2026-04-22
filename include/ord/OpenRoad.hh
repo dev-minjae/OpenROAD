@@ -78,6 +78,10 @@ namespace gpl {
 class Replace;
 }
 
+namespace mdm {
+class MultiDieManager;
+}
+
 namespace rcx {
 class Ext;
 }
@@ -169,6 +173,7 @@ class OpenRoad
   rcx::Ext* getOpenRCX() { return extractor_; }
   drt::TritonRoute* getTritonRoute() { return detailed_router_; }
   gpl::Replace* getReplace() { return replace_; }
+  mdm::MultiDieManager* getMultiDieManager() { return multi_die_manager_; }
   psm::PDNSim* getPDNSim() { return pdnsim_; }
   grt::GlobalRouter* getGlobalRouter() { return global_router_; }
   par::PartitionMgr* getPartitionMgr() { return partitionMgr_; }
@@ -279,6 +284,7 @@ class OpenRoad
   drt::TritonRoute* detailed_router_ = nullptr;
   ant::AntennaChecker* antenna_checker_ = nullptr;
   gpl::Replace* replace_ = nullptr;
+  mdm::MultiDieManager* multi_die_manager_ = nullptr;
   psm::PDNSim* pdnsim_ = nullptr;
   par::PartitionMgr* partitionMgr_ = nullptr;
   pdn::PdnGen* pdngen_ = nullptr;

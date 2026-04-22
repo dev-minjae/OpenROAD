@@ -289,6 +289,7 @@ add_subdirectory(mpl)
 add_subdirectory(par)
 add_subdirectory(est)
 add_subdirectory(web)
+add_subdirectory(mdm)
 
 ################################################################
 
@@ -360,6 +361,7 @@ target_link_libraries(openroad
   par
   est
   web
+  mdm
   absl::synchronization
   ${ABC_LIBRARY}
   ${TCL_LIBRARY}
