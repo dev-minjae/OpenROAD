@@ -31,4 +31,5 @@ target_link_libraries(mdm
     utl_lib
     odb
     gpl_lib
+    dpl_lib
 )

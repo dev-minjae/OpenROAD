@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "TestCaseManager.h"
+#include "dpl/Opendp.h"
 #include "odb/db.h"
 #include "utl/Logger.h"
 
@@ -26,13 +27,44 @@ using std::vector;
 
 MultiDieManager::MultiDieManager(odb::dbDatabase* db,
                                  utl::Logger* logger,
-                                 gpl::Replace* replace)
+                                 gpl::Replace* replace,
+                                 dpl::Opendp* opendp)
     : db_(db),
       logger_(logger),
       replace_(replace),
+      opendp_(opendp),
       test_case_manager_(std::make_unique<TestCaseManager>())
 {
   test_case_manager_->setMDM(this);
+}
+
+////////////////////////////////////////////////////////////////
+// Multi-die detailed placement — runs dpl::Opendp on every child
+// die in the top hier block using the block-aware detailedPlacement
+// overload added in Stage 1.6.
+////////////////////////////////////////////////////////////////
+
+void MultiDieManager::multiDieDetailPlacement(int max_displacement_x,
+                                              int max_displacement_y)
+{
+  if (!opendp_) {
+    logger_->error(utl::MDM, 30, "Opendp pointer is null.");
+    return;
+  }
+  odb::dbBlock* top_block = db_->getChip()->getBlock();
+  auto children = top_block->getChildren();
+  if (children.begin() == children.end()) {
+    logger_->warn(
+        utl::MDM,
+        31,
+        "No child dies found; call set_3D_IC before detailed placement.");
+    return;
+  }
+  for (auto* child : children) {
+    logger_->info(utl::MDM, 32, "Legalizing die {}", child->getName());
+    opendp_->detailedPlacement(
+        max_displacement_x, max_displacement_y, "", false, child);
+  }
 }
 
 MultiDieManager::~MultiDieManager() = default;
@@ -99,6 +131,9 @@ void MultiDieManager::makeSubBlocks()
         = odb::dbBlock::create(top_block, die_name.c_str());
     odb::dbInst::create(top_block, child_block, die_name.c_str());
     child_block->setDieArea(die_area);
+    // DPL reads block->getCoreArea(); keep it aligned with the die area so
+    // the ICCAD contest "entire die is usable" assumption is honoured.
+    child_block->setCoreArea(die_area);
     if (!test_case_manager_->isICCADParsed()) {
       inheritRows(top_block, child_block);
     }

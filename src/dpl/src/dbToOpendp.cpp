@@ -113,9 +113,11 @@ bool bboxIntersectsOuterShell(const Rect& bbox,
 
 }  // namespace
 
-void Opendp::importDb()
+void Opendp::importDb(odb::dbBlock* block)
 {
-  block_ = db_->getChip()->getBlock();
+  // Caller may pass a child block (multi-die flows) or nullptr for the
+  // default top chip block.
+  block_ = block ? block : db_->getChip()->getBlock();
   core_ = block_->getCoreArea();
   grid_->setCore(core_);
   have_fillers_ = false;
@@ -143,8 +145,13 @@ void Opendp::importClear()
 
 void Opendp::initPlacementDRC()
 {
-  drc_engine_ = std::make_unique<PlacementDRC>(
-      grid_.get(), db_->getTech(), padding_.get(), !odb::hasOneSiteMaster(db_));
+  // Multi-tech databases forbid dbDatabase::getTech(); use the block's tech
+  // (which is the same for both single- and multi-die flows because child
+  // blocks inherit the chip's tech).
+  drc_engine_ = std::make_unique<PlacementDRC>(grid_.get(),
+                                               block_->getTech(),
+                                               padding_.get(),
+                                               !odb::hasOneSiteMaster(db_));
 }
 
 static bool swapWidthHeight(const dbOrientType& orient)
@@ -185,13 +192,13 @@ Rect Opendp::getBbox(odb::dbInst* inst)
 }
 void Opendp::createNetwork()
 {
-  odb::dbBlock* block = db_->getChip()->getBlock();
+  odb::dbBlock* block = block_;
   network_->setCore(core_);
   const auto row_outer_shell_rects
       = getOuterShellRects(buildRowOuterShell(block));
   ///////////////////////////////////
   auto min_row_height = std::numeric_limits<int>::max();
-  for (odb::dbRow* row : db_->getChip()->getBlock()->getRows()) {
+  for (odb::dbRow* row : block_->getRows()) {
     min_row_height = std::min(min_row_height, row->getSite()->getHeight());
   }
   ///////////////////////////////////
@@ -256,7 +263,7 @@ void Opendp::createNetwork()
 ////////////////////////////////////////////////////////////////
 void Opendp::createArchitecture()
 {
-  odb::dbBlock* block = db_->getChip()->getBlock();
+  odb::dbBlock* block = block_;
 
   auto min_row_height = std::numeric_limits<int>::max();
   for (odb::dbRow* row : block->getRows()) {
@@ -359,7 +366,7 @@ void Opendp::createArchitecture()
 void Opendp::setUpPlacementGroups()
 {
   regions_rtree_.clear();
-  odb::dbBlock* block = db_->getChip()->getBlock();
+  odb::dbBlock* block = block_;
   int count = 0;
   auto db_groups = block->getGroups();
   for (auto db_group : db_groups) {

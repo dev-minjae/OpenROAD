@@ -21,6 +21,10 @@ namespace gpl {
 class Replace;
 }  // namespace gpl
 
+namespace dpl {
+class Opendp;
+}  // namespace dpl
+
 namespace mdm {
 
 class TestCaseManager;
@@ -30,12 +34,20 @@ class MultiDieManager
  public:
   MultiDieManager(odb::dbDatabase* db,
                   utl::Logger* logger,
-                  gpl::Replace* replace);
+                  gpl::Replace* replace,
+                  dpl::Opendp* opendp);
   ~MultiDieManager();
 
   odb::dbDatabase* getDb() const { return db_; }
   utl::Logger* getLogger() const { return logger_; }
   gpl::Replace* getReplace() const { return replace_; }
+  dpl::Opendp* getOpendp() const { return opendp_; }
+
+  // Run detailed placement on each child die. Assumes set_3D_IC + global
+  // placement have already run. Calls dpl::Opendp::detailedPlacement with
+  // the new block overload added in Stage 1.6.
+  void multiDieDetailPlacement(int max_displacement_x = 0,
+                               int max_displacement_y = 0);
 
   // 3D IC configuration. Calling set3DIC triggers splitInstances: read the
   // partition file (or fall back to a half/half split), create child blocks
@@ -75,6 +87,7 @@ class MultiDieManager
   odb::dbDatabase* db_ = nullptr;
   utl::Logger* logger_ = nullptr;
   gpl::Replace* replace_ = nullptr;
+  dpl::Opendp* opendp_ = nullptr;
 
   int number_of_die_ = 0;
   float shrink_area_ratio_ = 0.0f;

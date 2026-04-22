@@ -64,6 +64,14 @@ get_3d_hpwl(bool approximate = true)
 }
 
 void
+multi_die_detail_placement(int max_displacement_x = 0,
+                           int max_displacement_y = 0)
+{
+  getMultiDieManager()->multiDieDetailPlacement(max_displacement_x,
+                                                max_displacement_y);
+}
+
+void
 get_hpwl(const std::string& die_info = "")
 {
   getMultiDieManager()->getHPWL(die_info.empty() ? nullptr : die_info.c_str());

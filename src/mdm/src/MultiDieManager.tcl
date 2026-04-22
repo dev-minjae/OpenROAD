@@ -79,6 +79,25 @@ proc set_mdm_partition_file { args } {
   mdm::set_mdm_partition_file $keys(-file)
 }
 
+sta::define_cmd_args "multi_die_detail_placement" {\
+  [-max_displacement_x max_displacement_x] \
+  [-max_displacement_y max_displacement_y]}
+
+proc multi_die_detail_placement { args } {
+  sta::parse_key_args "multi_die_detail_placement" args \
+    keys {-max_displacement_x -max_displacement_y} flags {}
+
+  set dx 0
+  set dy 0
+  if { [info exists keys(-max_displacement_x)] } {
+    set dx $keys(-max_displacement_x)
+  }
+  if { [info exists keys(-max_displacement_y)] } {
+    set dy $keys(-max_displacement_y)
+  }
+  mdm::multi_die_detail_placement $dx $dy
+}
+
 sta::define_cmd_args "get_3d_hpwl" {[-exact]}
 
 proc get_3d_hpwl { args } {

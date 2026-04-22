@@ -31,6 +31,7 @@ cc_library(
     ],
     deps = [
         "//:ord",
+        "//src/dpl",
         "//src/gpl",
         "//src/odb",
         "//src/utl",

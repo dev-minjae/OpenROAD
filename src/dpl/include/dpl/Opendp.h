@@ -104,10 +104,14 @@ class Opendp
 
   // legalize/report
   // max_displacment is in sites. use zero for defaults.
+  // When `block` is null (default) the top chip block is used, which preserves
+  // single-die behaviour. Pass a child block to legalise an individual die in
+  // a multi-die design.
   void detailedPlacement(int max_displacement_x,
                          int max_displacement_y,
                          const std::string& report_file_name = std::string(""),
-                         bool incremental = false);
+                         bool incremental = false,
+                         odb::dbBlock* block = nullptr);
   void reportLegalizationStats() const;
 
   void setPaddingGlobal(int left, int right);
@@ -199,7 +203,7 @@ class Opendp
   void saveViolations(const std::vector<Node*>& failures,
                       odb::dbMarkerCategory* category,
                       const std::string& violation_type = "") const;
-  void importDb();
+  void importDb(odb::dbBlock* block = nullptr);
   void importClear();
   odb::Rect getBbox(odb::dbInst* inst);
   void createNetwork();

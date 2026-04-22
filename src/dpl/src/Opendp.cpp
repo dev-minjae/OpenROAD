@@ -115,10 +115,11 @@ Journal* Opendp::getJournal() const
 void Opendp::detailedPlacement(const int max_displacement_x,
                                const int max_displacement_y,
                                const std::string& report_file_name,
-                               bool incremental)
+                               bool incremental,
+                               odb::dbBlock* block)
 {
   incremental_ = incremental;
-  importDb();
+  importDb(block);
   adjustNodesOrient();
   if (!incremental_) {
     for (const auto& node : network_->getNodes()) {

@@ -522,6 +522,25 @@ void TestCaseManager::rowConstruction()
   auto block_iter = db->getChip()->getBlock()->getChildren().begin();
   std::advance(lib_iter, 1);  // skip TopHierLib
 
+  // Determine the tallest cell height per die. The ICCAD 2022 contest text
+  // exposes a very fine row_height (e.g. 16 DBU) with tall cells (e.g. 176
+  // DBU), which creates a heavy multi-row-cell scenario that legalisers
+  // struggle with. All cells within one tech of the 2022 bench share the
+  // same height, so we can upgrade the site to cell height (single-row
+  // legalisation) without losing information. This keeps DPL tractable at
+  // the cost of a coarser y-grid.
+  auto max_cell_height_of = [this](int die_idx) {
+    const auto& lib_cells
+        = bench_information_.die_infos.at(die_idx).tech_info->lib_cell_infos;
+    int h = 0;
+    for (const auto& c : lib_cells) {
+      h = std::max(h, c.height);
+    }
+    return h;
+  };
+  const int top_cell_h = max_cell_height_of(TOP_DIE);
+  const int bot_cell_h = max_cell_height_of(BOTTOM_DIE);
+
   for (int i = 0; i < 2; ++i) {
     dbLib* lib = *lib_iter;
     dbBlock* block = *block_iter;
@@ -529,22 +548,31 @@ void TestCaseManager::rowConstruction()
     dbSite* site;
     uint site_width;
     int site_height, num_of_sites, num_of_rows;
+    // getSiteWidth() already returns DBU (it multiplies the raw contest
+    // number by scale_), so the row/site arithmetic here must not apply
+    // scale_ twice.
     if (i == 0) {
       site = dbSite::create(lib, "TopSite");
-      site_width = getSiteWidth().first * scale_;
-      site_height = row_infos_.first.row_height * scale_;
+      site_width = getSiteWidth().first;
+      // Use max cell height so every cell fits in a single row.
+      site_height = top_cell_h * scale_;
       num_of_sites = static_cast<int>(
           std::floor(static_cast<double>(row_infos_.first.row_width * scale_)
                      / site_width));
-      num_of_rows = row_infos_.first.repeat_count;
+      // Fill the die area with rows of the coarser height.
+      const int die_h
+          = bench_information_.die_infos.at(TOP_DIE).upper_right_y * scale_;
+      num_of_rows = site_height > 0 ? die_h / site_height : 0;
     } else {
       site = dbSite::create(lib, "BottomSite");
-      site_width = getSiteWidth().second * scale_;
-      site_height = row_infos_.second.row_height * scale_;
+      site_width = getSiteWidth().second;
+      site_height = bot_cell_h * scale_;
       num_of_sites = static_cast<int>(
           std::floor(static_cast<double>(row_infos_.second.row_width * scale_)
                      / site_width));
-      num_of_rows = row_infos_.second.repeat_count;
+      const int die_h
+          = bench_information_.die_infos.at(BOTTOM_DIE).upper_right_y * scale_;
+      num_of_rows = site_height > 0 ? die_h / site_height : 0;
     }
     site->setWidth(site_width);
     site->setHeight(site_height);
