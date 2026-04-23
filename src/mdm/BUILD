@@ -19,6 +19,8 @@ cc_library(
         "src/SemiLegalizer.cpp",
         "src/SemiLegalizer.h",
         "src/SwitchInstHelper.cpp",
+        "src/TerminalLegalizer.cpp",
+        "src/TerminalLegalizer.h",
         "src/TestCaseManager.cpp",
         "src/TestCaseManager.h",
         ":swig",

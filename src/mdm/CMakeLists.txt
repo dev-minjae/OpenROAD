@@ -15,6 +15,7 @@ target_sources(mdm
     src/MultiDieManager.cpp
     src/SemiLegalizer.cpp
     src/SwitchInstHelper.cpp
+    src/TerminalLegalizer.cpp
     src/TestCaseManager.cpp
 )
 

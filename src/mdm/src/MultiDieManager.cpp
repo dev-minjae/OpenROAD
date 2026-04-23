@@ -13,10 +13,10 @@
 #include <locale>
 #include <sstream>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 #include "SemiLegalizer.h"
+#include "TerminalLegalizer.h"
 #include "TestCaseManager.h"
 #include "dpl/Opendp.h"
 #include "odb/db.h"
@@ -584,20 +584,25 @@ void MultiDieManager::writeICCAD2022Output(const string& file_name)
     emit_die("BottomDiePlacement", bottom_die);
   }
 
-  // Hybrid-bond terminals. The contest rules require:
+  // Hybrid-bond terminals. Contest rules require:
   //   1. Each terminal sits inside the die with `boundary-spacing` margin.
   //   2. Any two terminals are separated by `spacing` (centre-to-centre
   //      distance >= terminal_size + spacing on either axis).
   //
-  // We snap raw centres to a uniform (size + spacing) grid whose origin is
-  // (size/2 + spacing) from the die boundary. That choice matches the
-  // iPL-3D reference output (case2: 150 + 200 i) and trivially satisfies
-  // both rules. Collisions are resolved by a spiral search for the nearest
-  // empty cell.
+  // The terminal size + spacing `C` defines a uniform grid whose origin is
+  // (size/2 + spacing) from the die boundary — that choice trivially
+  // satisfies both rules and matches the iPL-3D reference output
+  // (case2: 150 + 200·i). The per-terminal assignment is computed by
+  // TerminalLegalizer: each terminal carries its Terminal Optimal Region
+  // (TOR, iPL-3D paper Definition 2) — the rectangle in which the combined
+  // top/bottom HPWL contribution is minimum — and is matched to the grid
+  // cell that minimises Manhattan distance to that rectangle (zero when
+  // inside).
   //
   // Top-hier net::getTermBBox() reports (0,0) for our intersected nets
-  // because the BTerm coordinates live in child-block scope, so we resolve
-  // raw centres by averaging the same-named net inside each child block.
+  // because the BTerm coordinates live in child-block scope, so we walk
+  // the same-named net inside each child block and merge their bboxes to
+  // reconstruct the TOR.
   odb::dbChip* chip = db_->getChip();
   auto* hb_x_prop = odb::dbIntProperty::find(chip, "hybridBondX");
   auto* hb_y_prop = odb::dbIntProperty::find(chip, "hybridBondY");
@@ -605,164 +610,80 @@ void MultiDieManager::writeICCAD2022Output(const string& file_name)
   const int hb_w = hb_x_prop ? hb_x_prop->getValue() : 0;
   const int hb_h = hb_y_prop ? hb_y_prop->getValue() : 0;
   const int hb_s = hb_s_prop ? hb_s_prop->getValue() : 0;
-  const int step_x = std::max(1, hb_w + hb_s);
-  const int step_y = std::max(1, hb_h + hb_s);
   const odb::Rect die = top_block->getDieArea();
-  const int origin_x = die.xMin() + hb_w / 2 + hb_s;
-  const int origin_y = die.yMin() + hb_h / 2 + hb_s;
+
+  TerminalLegalizer::Config cfg;
+  cfg.step_x = std::max(1, hb_w + hb_s);
+  cfg.step_y = std::max(1, hb_h + hb_s);
+  cfg.origin_x = die.xMin() + hb_w / 2 + hb_s;
+  cfg.origin_y = die.yMin() + hb_h / 2 + hb_s;
   const int max_x = die.xMax() - hb_w / 2 - hb_s;
   const int max_y = die.yMax() - hb_h / 2 - hb_s;
-  const int grid_w = std::max(1, (max_x - origin_x) / step_x + 1);
-  const int grid_h = std::max(1, (max_y - origin_y) / step_y + 1);
+  cfg.grid_w = std::max(1, (max_x - cfg.origin_x) / cfg.step_x + 1);
+  cfg.grid_h = std::max(1, (max_y - cfg.origin_y) / cfg.step_y + 1);
+
+  TerminalLegalizer legalizer(logger_, cfg);
 
   vector<odb::dbBlock*> child_blocks;
   for (auto* child : children) {
     child_blocks.push_back(child);
   }
 
-  // Each pending terminal carries its raw TOR (Terminal Optimal Region:
-  // the wirelength-minimising centre, as in Definition 2 of the iPL-3D
-  // paper) plus the grid index assigned to it.
-  struct Pending
-  {
-    string name;
-    int rx;  // raw TOR x (DBU)
-    int ry;  // raw TOR y (DBU)
-    int gi;  // assigned grid column
-    int gj;  // assigned grid row
-  };
-  vector<Pending> pending;
-  pending.reserve(top_block->getNets().size());
   for (auto* net : top_block->getNets()) {
     if (!odb::dbBoolProperty::find(net, "intersected")) {
       continue;
     }
-    int64_t sum_x = 0;
-    int64_t sum_y = 0;
-    int sample_count = 0;
+    // Collect per-child bboxes (typically one from top die, one from bottom).
+    vector<odb::Rect> child_bboxes;
     for (auto* child : child_blocks) {
       odb::dbNet* child_net = child->findNet(net->getName().c_str());
       if (!child_net) {
         continue;
       }
-      const odb::Rect bbox = child_net->getTermBBox();
-      sum_x += bbox.xCenter();
-      sum_y += bbox.yCenter();
-      sample_count++;
+      child_bboxes.push_back(child_net->getTermBBox());
     }
-    const int rx = sample_count > 0 ? static_cast<int>(sum_x / sample_count)
-                                    : (die.xMin() + die.xMax()) / 2;
-    const int ry = sample_count > 0 ? static_cast<int>(sum_y / sample_count)
-                                    : (die.yMin() + die.yMax()) / 2;
-    const int gi
-        = std::clamp((rx - origin_x + step_x / 2) / step_x, 0, grid_w - 1);
-    const int gj
-        = std::clamp((ry - origin_y + step_y / 2) / step_y, 0, grid_h - 1);
-    pending.push_back({net->getName(), rx, ry, gi, gj});
+
+    // Construct the TOR rectangle. Paper Definition 2: the optimal region
+    // is the "bounding boxes' midpoint of the net e_j⁻ and net e_j⁺".
+    // In 1D the HPWL sum is minimised over the middle range of the four
+    // sorted coordinates {xMin_top, xMax_top, xMin_bot, xMax_bot};
+    // generalises to the intersection-or-gap interval in each axis.
+    int tor_xlo = (die.xMin() + die.xMax()) / 2;
+    int tor_xhi = tor_xlo;
+    int tor_ylo = (die.yMin() + die.yMax()) / 2;
+    int tor_yhi = tor_ylo;
+    if (child_bboxes.size() >= 2) {
+      int xs[4] = {child_bboxes[0].xMin(),
+                   child_bboxes[0].xMax(),
+                   child_bboxes[1].xMin(),
+                   child_bboxes[1].xMax()};
+      int ys[4] = {child_bboxes[0].yMin(),
+                   child_bboxes[0].yMax(),
+                   child_bboxes[1].yMin(),
+                   child_bboxes[1].yMax()};
+      std::sort(std::begin(xs), std::end(xs));
+      std::sort(std::begin(ys), std::end(ys));
+      tor_xlo = xs[1];
+      tor_xhi = xs[2];
+      tor_ylo = ys[1];
+      tor_yhi = ys[2];
+    } else if (child_bboxes.size() == 1) {
+      const odb::Rect& b = child_bboxes.front();
+      tor_xlo = b.xMin();
+      tor_xhi = b.xMax();
+      tor_ylo = b.yMin();
+      tor_yhi = b.yMax();
+    }
+    legalizer.addTerminal(net->getName(), tor_xlo, tor_ylo, tor_xhi, tor_yhi);
   }
 
-  // Sort terminals by Manhattan distance from raw TOR to the centre of
-  // their nearest grid cell, descending. Strictest-constrained terminals
-  // (those whose TOR is farthest from any grid centre, so any displacement
-  // matters most) get first pick of grid cells; loose ones absorb the
-  // residual collisions. This is a poor-man's bipartite matching that
-  // shrinks the worst-case Manhattan cost vs. arbitrary input order.
-  auto manhattan_cost = [&](const Pending& t, int gi, int gj) {
-    const int cx = origin_x + gi * step_x;
-    const int cy = origin_y + gj * step_y;
-    return std::abs(cx - t.rx) + std::abs(cy - t.ry);
-  };
-  std::sort(
-      pending.begin(), pending.end(), [&](const Pending& a, const Pending& b) {
-        return manhattan_cost(a, a.gi, a.gj) > manhattan_cost(b, b.gi, b.gj);
-      });
+  legalizer.legalize();
 
-  // Spiral collision resolution in Chebyshev rings. Within each ring we
-  // pick the candidate that minimises Manhattan distance to the TOR, not
-  // the first one we encounter — keeps cost linear in the displacement
-  // we actually pay.
-  auto cell_id = [&](int i, int j) {
-    return static_cast<int64_t>(i) * static_cast<int64_t>(grid_h) + j;
-  };
-  std::unordered_set<int64_t> taken;
-  taken.reserve(pending.size() * 2);
-  const int radius_max = std::max(grid_w, grid_h);
-  for (auto& term : pending) {
-    if (taken.insert(cell_id(term.gi, term.gj)).second) {
-      continue;
-    }
-    bool placed = false;
-    int best_cost = std::numeric_limits<int>::max();
-    int best_ni = term.gi;
-    int best_nj = term.gj;
-    for (int radius = 1; radius <= radius_max && !placed; ++radius) {
-      for (int di = -radius; di <= radius; ++di) {
-        for (int dj = -radius; dj <= radius; ++dj) {
-          if (std::max(std::abs(di), std::abs(dj)) != radius) {
-            continue;
-          }
-          const int ni = term.gi + di;
-          const int nj = term.gj + dj;
-          if (ni < 0 || ni >= grid_w || nj < 0 || nj >= grid_h) {
-            continue;
-          }
-          if (taken.count(cell_id(ni, nj))) {
-            continue;
-          }
-          const int c = manhattan_cost(term, ni, nj);
-          if (c < best_cost) {
-            best_cost = c;
-            best_ni = ni;
-            best_nj = nj;
-            placed = true;
-          }
-        }
-      }
-    }
-    if (placed) {
-      taken.insert(cell_id(best_ni, best_nj));
-      term.gi = best_ni;
-      term.gj = best_nj;
-    } else {
-      logger_->warn(utl::MDM,
-                    33,
-                    "writeICCAD2022Output: terminal grid full for net {}; "
-                    "leaving on conflicting cell.",
-                    term.name);
-    }
-  }
-
-  // Local refinement: pair-swap to lower total Manhattan cost. Cap by
-  // problem size so case4 (43k terminals) does not blow up the runtime.
-  // O(m^2) per pass; we cap passes adaptively.
-  const int swap_pass_cap
-      = pending.size() < 5000 ? 4 : (pending.size() < 15000 ? 2 : 1);
-  bool any_swap = true;
-  int swap_passes = 0;
-  while (any_swap && swap_passes < swap_pass_cap) {
-    any_swap = false;
-    ++swap_passes;
-    for (size_t i = 0; i < pending.size(); ++i) {
-      for (size_t j = i + 1; j < pending.size(); ++j) {
-        const int cost_now
-            = manhattan_cost(pending[i], pending[i].gi, pending[i].gj)
-              + manhattan_cost(pending[j], pending[j].gi, pending[j].gj);
-        const int cost_swap
-            = manhattan_cost(pending[i], pending[j].gi, pending[j].gj)
-              + manhattan_cost(pending[j], pending[i].gi, pending[i].gj);
-        if (cost_swap < cost_now) {
-          std::swap(pending[i].gi, pending[j].gi);
-          std::swap(pending[i].gj, pending[j].gj);
-          any_swap = true;
-        }
-      }
-    }
-  }
-
-  out << "NumTerminals " << pending.size() << '\n';
-  for (const auto& term : pending) {
-    const int cx = origin_x + term.gi * step_x;
-    const int cy = origin_y + term.gj * step_y;
+  const auto& terms = legalizer.terminals();
+  out << "NumTerminals " << terms.size() << '\n';
+  for (const auto& term : terms) {
+    const int cx = legalizer.gridCenterX(term.gi);
+    const int cy = legalizer.gridCenterY(term.gj);
     out << "Terminal " << term.name << ' ' << cx / scale << ' ' << cy / scale
         << '\n';
   }
