@@ -1,5 +1,7 @@
 # Put tool specific ignores in the tool directory, not here.
 
+.worklog/
+
 *.o
 *.a
 *.lo
