@@ -49,6 +49,11 @@ class MultiDieManager
   void multiDieDetailPlacement(int max_displacement_x = 0,
                                int max_displacement_y = 0);
 
+  // Abacus-based row legalizer for child dies. Used for ICCAD 2022 fine-grid
+  // scenarios where Opendp cannot converge. target_die: ""/"top"/"bottom".
+  void runSemiLegalizer(const std::string& target_die = "",
+                        bool use_abacus = true);
+
   // 3D IC configuration. Calling set3DIC triggers splitInstances: read the
   // partition file (or fall back to a half/half split), create child blocks
   // per die, move instances into the assigned dies, and wire intersected

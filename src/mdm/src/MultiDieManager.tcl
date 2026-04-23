@@ -98,6 +98,28 @@ proc multi_die_detail_placement { args } {
   mdm::multi_die_detail_placement $dx $dy
 }
 
+sta::define_cmd_args "run_semi_legalizer" {\
+  [-target_die target_die] \
+  [-no_abacus]}
+
+proc run_semi_legalizer { args } {
+  sta::parse_key_args "run_semi_legalizer" args \
+    keys {-target_die} flags {-no_abacus}
+
+  set target ""
+  if { [info exists keys(-target_die)] } {
+    set target $keys(-target_die)
+    if { $target ne "" && $target ne "top" && $target ne "bottom" } {
+      utl::error MDM 108 "-target_die must be \"top\", \"bottom\", or empty."
+    }
+  }
+  set use_abacus true
+  if { [info exists flags(-no_abacus)] } {
+    set use_abacus false
+  }
+  mdm::run_semi_legalizer $target $use_abacus
+}
+
 sta::define_cmd_args "get_3d_hpwl" {[-exact]}
 
 proc get_3d_hpwl { args } {

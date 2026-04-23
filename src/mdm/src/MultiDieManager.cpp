@@ -5,14 +5,18 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <locale>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
+#include "SemiLegalizer.h"
 #include "TestCaseManager.h"
 #include "dpl/Opendp.h"
 #include "odb/db.h"
@@ -65,6 +69,18 @@ void MultiDieManager::multiDieDetailPlacement(int max_displacement_x,
     opendp_->detailedPlacement(
         max_displacement_x, max_displacement_y, "", false, child);
   }
+}
+
+////////////////////////////////////////////////////////////////
+// Multi-die SemiLegalizer — Abacus-based fallback for ICCAD
+// 2022 fine-grid scenarios that Opendp cannot legalize.
+////////////////////////////////////////////////////////////////
+
+void MultiDieManager::runSemiLegalizer(const std::string& target_die,
+                                       bool use_abacus)
+{
+  SemiLegalizer legalizer(db_, logger_);
+  legalizer.run(use_abacus, target_die);
 }
 
 MultiDieManager::~MultiDieManager() = default;
@@ -568,22 +584,123 @@ void MultiDieManager::writeICCAD2022Output(const string& file_name)
     emit_die("BottomDiePlacement", bottom_die);
   }
 
-  // Hybrid-bond terminals — the x/y centre of every top-hier net marked
-  // intersected. Stage 1 leaves these at the net bounding-box centre;
-  // Stage 3 will explore force-directed refinement.
-  vector<std::pair<string, odb::Point>> terminals;
+  // Hybrid-bond terminals. The contest rules require:
+  //   1. Each terminal sits inside the die with `boundary-spacing` margin.
+  //   2. Any two terminals are separated by `spacing` (centre-to-centre
+  //      distance >= terminal_size + spacing on either axis).
+  //
+  // We snap raw centres to a uniform (size + spacing) grid whose origin is
+  // (size/2 + spacing) from the die boundary. That choice matches the
+  // iPL-3D reference output (case2: 150 + 200 i) and trivially satisfies
+  // both rules. Collisions are resolved by a spiral search for the nearest
+  // empty cell.
+  //
+  // Top-hier net::getTermBBox() reports (0,0) for our intersected nets
+  // because the BTerm coordinates live in child-block scope, so we resolve
+  // raw centres by averaging the same-named net inside each child block.
+  odb::dbChip* chip = db_->getChip();
+  auto* hb_x_prop = odb::dbIntProperty::find(chip, "hybridBondX");
+  auto* hb_y_prop = odb::dbIntProperty::find(chip, "hybridBondY");
+  auto* hb_s_prop = odb::dbIntProperty::find(chip, "hybridBondSpacing");
+  const int hb_w = hb_x_prop ? hb_x_prop->getValue() : 0;
+  const int hb_h = hb_y_prop ? hb_y_prop->getValue() : 0;
+  const int hb_s = hb_s_prop ? hb_s_prop->getValue() : 0;
+  const int step_x = std::max(1, hb_w + hb_s);
+  const int step_y = std::max(1, hb_h + hb_s);
+  const odb::Rect die = top_block->getDieArea();
+  const int origin_x = die.xMin() + hb_w / 2 + hb_s;
+  const int origin_y = die.yMin() + hb_h / 2 + hb_s;
+  const int max_x = die.xMax() - hb_w / 2 - hb_s;
+  const int max_y = die.yMax() - hb_h / 2 - hb_s;
+  const int grid_w = std::max(1, (max_x - origin_x) / step_x + 1);
+  const int grid_h = std::max(1, (max_y - origin_y) / step_y + 1);
+
+  vector<odb::dbBlock*> child_blocks;
+  for (auto* child : children) {
+    child_blocks.push_back(child);
+  }
+
+  struct Pending
+  {
+    string name;
+    int gi;
+    int gj;
+  };
+  vector<Pending> pending;
   for (auto* net : top_block->getNets()) {
     if (!odb::dbBoolProperty::find(net, "intersected")) {
       continue;
     }
-    const odb::Rect box = net->getTermBBox();
-    terminals.emplace_back(net->getName(),
-                           odb::Point(box.xCenter(), box.yCenter()));
+    int64_t sum_x = 0;
+    int64_t sum_y = 0;
+    int sample_count = 0;
+    for (auto* child : child_blocks) {
+      odb::dbNet* child_net = child->findNet(net->getName().c_str());
+      if (!child_net) {
+        continue;
+      }
+      const odb::Rect bbox = child_net->getTermBBox();
+      sum_x += bbox.xCenter();
+      sum_y += bbox.yCenter();
+      sample_count++;
+    }
+    const int rx = sample_count > 0 ? static_cast<int>(sum_x / sample_count)
+                                    : (die.xMin() + die.xMax()) / 2;
+    const int ry = sample_count > 0 ? static_cast<int>(sum_y / sample_count)
+                                    : (die.yMin() + die.yMax()) / 2;
+    int gi = std::clamp((rx - origin_x + step_x / 2) / step_x, 0, grid_w - 1);
+    int gj = std::clamp((ry - origin_y + step_y / 2) / step_y, 0, grid_h - 1);
+    pending.push_back({net->getName(), gi, gj});
   }
-  out << "NumTerminals " << terminals.size() << '\n';
-  for (const auto& [name, pt] : terminals) {
-    out << "Terminal " << name << ' ' << pt.getX() / scale << ' '
-        << pt.getY() / scale << '\n';
+
+  // Spiral-search collision resolution. Cell ids are a 64-bit packed
+  // (i, j) so std::unordered_set lookup is O(1).
+  auto cell_id = [&](int i, int j) {
+    return static_cast<int64_t>(i) * static_cast<int64_t>(grid_h) + j;
+  };
+  std::unordered_set<int64_t> taken;
+  taken.reserve(pending.size() * 2);
+  const int radius_max = std::max(grid_w, grid_h);
+  for (auto& term : pending) {
+    if (taken.insert(cell_id(term.gi, term.gj)).second) {
+      continue;
+    }
+    bool placed = false;
+    for (int radius = 1; radius <= radius_max && !placed; ++radius) {
+      for (int di = -radius; di <= radius && !placed; ++di) {
+        for (int dj = -radius; dj <= radius && !placed; ++dj) {
+          if (std::max(std::abs(di), std::abs(dj)) != radius) {
+            continue;
+          }
+          const int ni = term.gi + di;
+          const int nj = term.gj + dj;
+          if (ni < 0 || ni >= grid_w || nj < 0 || nj >= grid_h) {
+            continue;
+          }
+          if (!taken.insert(cell_id(ni, nj)).second) {
+            continue;
+          }
+          term.gi = ni;
+          term.gj = nj;
+          placed = true;
+        }
+      }
+    }
+    if (!placed) {
+      logger_->warn(utl::MDM,
+                    33,
+                    "writeICCAD2022Output: terminal grid full for net {}; "
+                    "leaving on conflicting cell.",
+                    term.name);
+    }
+  }
+
+  out << "NumTerminals " << pending.size() << '\n';
+  for (const auto& term : pending) {
+    const int cx = origin_x + term.gi * step_x;
+    const int cy = origin_y + term.gj * step_y;
+    out << "Terminal " << term.name << ' ' << cx / scale << ' ' << cy / scale
+        << '\n';
   }
 }
 

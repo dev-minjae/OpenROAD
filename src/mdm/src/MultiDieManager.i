@@ -72,6 +72,13 @@ multi_die_detail_placement(int max_displacement_x = 0,
 }
 
 void
+run_semi_legalizer(const std::string& target_die = "",
+                   bool use_abacus = true)
+{
+  getMultiDieManager()->runSemiLegalizer(target_die, use_abacus);
+}
+
+void
 get_hpwl(const std::string& die_info = "")
 {
   getMultiDieManager()->getHPWL(die_info.empty() ? nullptr : die_info.c_str());
