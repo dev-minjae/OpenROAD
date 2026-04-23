@@ -620,13 +620,19 @@ void MultiDieManager::writeICCAD2022Output(const string& file_name)
     child_blocks.push_back(child);
   }
 
+  // Each pending terminal carries its raw TOR (Terminal Optimal Region:
+  // the wirelength-minimising centre, as in Definition 2 of the iPL-3D
+  // paper) plus the grid index assigned to it.
   struct Pending
   {
     string name;
-    int gi;
-    int gj;
+    int rx;  // raw TOR x (DBU)
+    int ry;  // raw TOR y (DBU)
+    int gi;  // assigned grid column
+    int gj;  // assigned grid row
   };
   vector<Pending> pending;
+  pending.reserve(top_block->getNets().size());
   for (auto* net : top_block->getNets()) {
     if (!odb::dbBoolProperty::find(net, "intersected")) {
       continue;
@@ -648,13 +654,33 @@ void MultiDieManager::writeICCAD2022Output(const string& file_name)
                                     : (die.xMin() + die.xMax()) / 2;
     const int ry = sample_count > 0 ? static_cast<int>(sum_y / sample_count)
                                     : (die.yMin() + die.yMax()) / 2;
-    int gi = std::clamp((rx - origin_x + step_x / 2) / step_x, 0, grid_w - 1);
-    int gj = std::clamp((ry - origin_y + step_y / 2) / step_y, 0, grid_h - 1);
-    pending.push_back({net->getName(), gi, gj});
+    const int gi
+        = std::clamp((rx - origin_x + step_x / 2) / step_x, 0, grid_w - 1);
+    const int gj
+        = std::clamp((ry - origin_y + step_y / 2) / step_y, 0, grid_h - 1);
+    pending.push_back({net->getName(), rx, ry, gi, gj});
   }
 
-  // Spiral-search collision resolution. Cell ids are a 64-bit packed
-  // (i, j) so std::unordered_set lookup is O(1).
+  // Sort terminals by Manhattan distance from raw TOR to the centre of
+  // their nearest grid cell, descending. Strictest-constrained terminals
+  // (those whose TOR is farthest from any grid centre, so any displacement
+  // matters most) get first pick of grid cells; loose ones absorb the
+  // residual collisions. This is a poor-man's bipartite matching that
+  // shrinks the worst-case Manhattan cost vs. arbitrary input order.
+  auto manhattan_cost = [&](const Pending& t, int gi, int gj) {
+    const int cx = origin_x + gi * step_x;
+    const int cy = origin_y + gj * step_y;
+    return std::abs(cx - t.rx) + std::abs(cy - t.ry);
+  };
+  std::sort(
+      pending.begin(), pending.end(), [&](const Pending& a, const Pending& b) {
+        return manhattan_cost(a, a.gi, a.gj) > manhattan_cost(b, b.gi, b.gj);
+      });
+
+  // Spiral collision resolution in Chebyshev rings. Within each ring we
+  // pick the candidate that minimises Manhattan distance to the TOR, not
+  // the first one we encounter — keeps cost linear in the displacement
+  // we actually pay.
   auto cell_id = [&](int i, int j) {
     return static_cast<int64_t>(i) * static_cast<int64_t>(grid_h) + j;
   };
@@ -666,9 +692,12 @@ void MultiDieManager::writeICCAD2022Output(const string& file_name)
       continue;
     }
     bool placed = false;
+    int best_cost = std::numeric_limits<int>::max();
+    int best_ni = term.gi;
+    int best_nj = term.gj;
     for (int radius = 1; radius <= radius_max && !placed; ++radius) {
-      for (int di = -radius; di <= radius && !placed; ++di) {
-        for (int dj = -radius; dj <= radius && !placed; ++dj) {
+      for (int di = -radius; di <= radius; ++di) {
+        for (int dj = -radius; dj <= radius; ++dj) {
           if (std::max(std::abs(di), std::abs(dj)) != radius) {
             continue;
           }
@@ -677,21 +706,56 @@ void MultiDieManager::writeICCAD2022Output(const string& file_name)
           if (ni < 0 || ni >= grid_w || nj < 0 || nj >= grid_h) {
             continue;
           }
-          if (!taken.insert(cell_id(ni, nj)).second) {
+          if (taken.count(cell_id(ni, nj))) {
             continue;
           }
-          term.gi = ni;
-          term.gj = nj;
-          placed = true;
+          const int c = manhattan_cost(term, ni, nj);
+          if (c < best_cost) {
+            best_cost = c;
+            best_ni = ni;
+            best_nj = nj;
+            placed = true;
+          }
         }
       }
     }
-    if (!placed) {
+    if (placed) {
+      taken.insert(cell_id(best_ni, best_nj));
+      term.gi = best_ni;
+      term.gj = best_nj;
+    } else {
       logger_->warn(utl::MDM,
                     33,
                     "writeICCAD2022Output: terminal grid full for net {}; "
                     "leaving on conflicting cell.",
                     term.name);
+    }
+  }
+
+  // Local refinement: pair-swap to lower total Manhattan cost. Cap by
+  // problem size so case4 (43k terminals) does not blow up the runtime.
+  // O(m^2) per pass; we cap passes adaptively.
+  const int swap_pass_cap
+      = pending.size() < 5000 ? 4 : (pending.size() < 15000 ? 2 : 1);
+  bool any_swap = true;
+  int swap_passes = 0;
+  while (any_swap && swap_passes < swap_pass_cap) {
+    any_swap = false;
+    ++swap_passes;
+    for (size_t i = 0; i < pending.size(); ++i) {
+      for (size_t j = i + 1; j < pending.size(); ++j) {
+        const int cost_now
+            = manhattan_cost(pending[i], pending[i].gi, pending[i].gj)
+              + manhattan_cost(pending[j], pending[j].gi, pending[j].gj);
+        const int cost_swap
+            = manhattan_cost(pending[i], pending[j].gi, pending[j].gj)
+              + manhattan_cost(pending[j], pending[i].gi, pending[i].gj);
+        if (cost_swap < cost_now) {
+          std::swap(pending[i].gi, pending[j].gi);
+          std::swap(pending[i].gj, pending[j].gj);
+          any_swap = true;
+        }
+      }
     }
   }
 
