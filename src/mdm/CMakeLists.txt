@@ -3,6 +3,8 @@
 
 include("openroad")
 
+find_package(LEMON NAMES LEMON lemon REQUIRED)
+
 swig_lib(NAME      mdm
          NAMESPACE mdm
          I_FILE    src/MultiDieManager.i
@@ -26,6 +28,7 @@ target_include_directories(mdm
     include
   PRIVATE
     src
+    ${LEMON_INCLUDE_DIRS}
 )
 
 target_link_libraries(mdm

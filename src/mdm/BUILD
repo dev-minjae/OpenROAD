@@ -39,6 +39,7 @@ cc_library(
         "//src/gpl",
         "//src/odb",
         "//src/utl",
+        "@coin-or-lemon//:lemon",
         "@tcl_lang//:tcl",
     ],
 )

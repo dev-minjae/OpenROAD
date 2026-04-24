@@ -35,6 +35,18 @@ class TerminalLegalizer
     int step_y = 1;    // grid pitch Y
     int grid_w = 1;    // number of columns
     int grid_h = 1;    // number of rows
+
+    // Phase 1b: when true, solve the terminal-to-grid assignment as a
+    // weighted bipartite matching (min-cost flow via LEMON network
+    // simplex, iPL-3D paper §IV.E). Otherwise fall back to the greedy
+    // sort + spiral + pair-swap path.
+    bool use_bipartite_matching = true;
+    // Half-width (in grid cells) of the candidate window around each
+    // terminal's TOR centre. r=2 gives a 5x5 = 25 candidate set,
+    // matching paper Table III δ=25. The legalizer grows r up to
+    // max_candidate_radius if the matching is infeasible.
+    int candidate_radius = 2;
+    int max_candidate_radius = 16;
   };
 
   struct Terminal
@@ -84,6 +96,17 @@ class TerminalLegalizer
   // before collisions are resolved).
   int torCenterGi(const Terminal& t) const;
   int torCenterGj(const Terminal& t) const;
+
+  // Paper §IV.E bipartite matching. Returns true iff every terminal was
+  // matched; on false, all assignments are left in their initial (TOR
+  // centre) state so the caller can fall back to the greedy path.
+  bool legalizeByMatching();
+  // Greedy port of the previous inline implementation. Also doubles as
+  // the fallback when matching is infeasible.
+  void legalizeGreedy();
+  // Pair-swap refinement. Safe on any valid assignment (no-ops if already
+  // locally optimal) and used after matching or greedy placement.
+  void runPairSwap();
 
   utl::Logger* logger_ = nullptr;
   Config cfg_;
