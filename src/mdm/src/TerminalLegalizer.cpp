@@ -7,11 +7,15 @@
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
+#include <numeric>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include "boost/geometry/geometries/box.hpp"
+#include "boost/geometry/geometry.hpp"
+#include "boost/geometry/index/rtree.hpp"
 #include "lemon/list_graph.h"
 #include "lemon/network_simplex.h"
 #include "utl/Logger.h"
@@ -91,10 +95,22 @@ void TerminalLegalizer::legalize()
     // improvements that require moving a terminal outside its window,
     // and is a no-op when the matching was globally optimal.
     runPairSwap();
-    return;
+  } else {
+    legalizeGreedy();
   }
 
-  legalizeGreedy();
+  syncCoordsFromGrid();
+  if (cfg_.run_rtree_refinement) {
+    runRtreeRefinement();
+  }
+}
+
+void TerminalLegalizer::syncCoordsFromGrid()
+{
+  for (auto& t : terminals_) {
+    t.x = gridCenterX(t.gi);
+    t.y = gridCenterY(t.gj);
+  }
 }
 
 bool TerminalLegalizer::legalizeByMatching()
@@ -353,6 +369,232 @@ void TerminalLegalizer::runPairSwap()
         }
       }
     }
+  }
+}
+
+void TerminalLegalizer::runRtreeRefinement()
+{
+  namespace bg = boost::geometry;
+  namespace bgi = boost::geometry::index;
+  using Point = bg::model::point<int, 2, bg::cs::cartesian>;
+  using Box = bg::model::box<Point>;
+  using RValue = std::pair<Point, int>;
+  using RTree = bgi::rtree<RValue, bgi::rstar<16>>;
+
+  if (terminals_.size() < 2) {
+    return;
+  }
+
+  // Die bounds (grid envelope). A terminal can never leave this box.
+  const int x_min = cfg_.origin_x;
+  const int x_max = cfg_.origin_x + (cfg_.grid_w - 1) * cfg_.step_x;
+  const int y_min = cfg_.origin_y;
+  const int y_max = cfg_.origin_y + (cfg_.grid_h - 1) * cfg_.step_y;
+
+  RTree tree;
+  for (int i = 0; i < static_cast<int>(terminals_.size()); ++i) {
+    tree.insert({Point(terminals_[i].x, terminals_[i].y), i});
+  }
+
+  auto currentCost = [&](int idx) {
+    const Terminal& t = terminals_[idx];
+    return costToTor(t.x, t.y, t);
+  };
+
+  std::vector<int> order(terminals_.size());
+  std::iota(order.begin(), order.end(), 0);
+
+  // Paper §IV.E: terminals with the largest current distance to their TOR
+  // get first pick. Repeat the sweep until no terminal can move — the
+  // spacing constraint makes shifts order-dependent, so a second pass
+  // often unlocks neighbours freed by earlier moves.
+  const int max_passes = 8;
+  int pass = 0;
+  int total_moves = 0;
+  while (pass < max_passes) {
+    std::sort(order.begin(), order.end(), [&](int a, int b) {
+      return currentCost(a) > currentCost(b);
+    });
+    int moves_this_pass = 0;
+    for (int idx : order) {
+      Terminal& t = terminals_[idx];
+      const int64_t cur_cost = currentCost(idx);
+      if (cur_cost == 0) {
+        break;  // the rest are already inside their TOR
+      }
+
+      // Which cardinal directions would reduce cost?
+      const bool want_right = t.x < t.tor_xlo;
+      const bool want_left = t.x > t.tor_xhi;
+      const bool want_up = t.y < t.tor_ylo;
+      const bool want_down = t.y > t.tor_yhi;
+
+      // Remove self so neighbour queries return only the opponents.
+      tree.remove({Point(t.x, t.y), idx});
+
+      // Y band for X-axis shifts: neighbours whose |dy| < step_y block us.
+      // Likewise X band for Y-axis shifts.
+      auto maxShiftX = [&](bool right) -> int64_t {
+        const int y_lo = std::max(t.y - cfg_.step_y + 1, y_min - cfg_.step_y);
+        const int y_hi = std::min(t.y + cfg_.step_y - 1, y_max + cfg_.step_y);
+        int x_lo_q = right ? t.x + 1 : x_min - cfg_.step_x;
+        int x_hi_q = right ? x_max + cfg_.step_x : t.x - 1;
+        if (x_lo_q > x_hi_q) {
+          return 0;
+        }
+        Box q(Point(x_lo_q, y_lo), Point(x_hi_q, y_hi));
+        int64_t limit;
+        if (right) {
+          const int64_t tor_d = t.tor_xlo - t.x;
+          const int64_t die_d = x_max - t.x;
+          limit = std::min(tor_d, die_d);
+        } else {
+          const int64_t tor_d = t.x - t.tor_xhi;
+          const int64_t die_d = t.x - x_min;
+          limit = std::min(tor_d, die_d);
+        }
+        if (limit <= 0) {
+          return 0;
+        }
+        std::vector<RValue> neigh;
+        tree.query(bgi::intersects(q), std::back_inserter(neigh));
+        for (const auto& [p, i] : neigh) {
+          const int nx = bg::get<0>(p);
+          const int ny = bg::get<1>(p);
+          if (std::abs(ny - t.y) >= cfg_.step_y) {
+            continue;  // this neighbour allows any dx
+          }
+          int64_t d;
+          if (right) {
+            d = static_cast<int64_t>(nx) - t.x - cfg_.step_x;
+          } else {
+            d = static_cast<int64_t>(t.x) - nx - cfg_.step_x;
+          }
+          if (d < 0) {
+            d = 0;  // already at or inside spacing — should not move at all
+          }
+          if (d < limit) {
+            limit = d;
+          }
+        }
+        return std::max<int64_t>(0, limit);
+      };
+      auto maxShiftY = [&](bool up) -> int64_t {
+        const int x_lo = std::max(t.x - cfg_.step_x + 1, x_min - cfg_.step_x);
+        const int x_hi = std::min(t.x + cfg_.step_x - 1, x_max + cfg_.step_x);
+        int y_lo_q = up ? t.y + 1 : y_min - cfg_.step_y;
+        int y_hi_q = up ? y_max + cfg_.step_y : t.y - 1;
+        if (y_lo_q > y_hi_q) {
+          return 0;
+        }
+        Box q(Point(x_lo, y_lo_q), Point(x_hi, y_hi_q));
+        int64_t limit;
+        if (up) {
+          const int64_t tor_d = t.tor_ylo - t.y;
+          const int64_t die_d = y_max - t.y;
+          limit = std::min(tor_d, die_d);
+        } else {
+          const int64_t tor_d = t.y - t.tor_yhi;
+          const int64_t die_d = t.y - y_min;
+          limit = std::min(tor_d, die_d);
+        }
+        if (limit <= 0) {
+          return 0;
+        }
+        std::vector<RValue> neigh;
+        tree.query(bgi::intersects(q), std::back_inserter(neigh));
+        for (const auto& [p, i] : neigh) {
+          const int nx = bg::get<0>(p);
+          const int ny = bg::get<1>(p);
+          if (std::abs(nx - t.x) >= cfg_.step_x) {
+            continue;
+          }
+          int64_t d;
+          if (up) {
+            d = static_cast<int64_t>(ny) - t.y - cfg_.step_y;
+          } else {
+            d = static_cast<int64_t>(t.y) - ny - cfg_.step_y;
+          }
+          if (d < 0) {
+            d = 0;
+          }
+          if (d < limit) {
+            limit = d;
+          }
+        }
+        return std::max<int64_t>(0, limit);
+      };
+
+      int best_dx = 0;
+      int best_dy = 0;
+      int64_t best_new_cost = cur_cost;
+      if (want_right) {
+        const int64_t d = maxShiftX(true);
+        if (d > 0) {
+          const int64_t new_cost = costToTor(t.x + static_cast<int>(d), t.y, t);
+          if (new_cost < best_new_cost) {
+            best_new_cost = new_cost;
+            best_dx = static_cast<int>(d);
+            best_dy = 0;
+          }
+        }
+      }
+      if (want_left) {
+        const int64_t d = maxShiftX(false);
+        if (d > 0) {
+          const int64_t new_cost = costToTor(t.x - static_cast<int>(d), t.y, t);
+          if (new_cost < best_new_cost) {
+            best_new_cost = new_cost;
+            best_dx = -static_cast<int>(d);
+            best_dy = 0;
+          }
+        }
+      }
+      if (want_up) {
+        const int64_t d = maxShiftY(true);
+        if (d > 0) {
+          const int64_t new_cost = costToTor(t.x, t.y + static_cast<int>(d), t);
+          if (new_cost < best_new_cost) {
+            best_new_cost = new_cost;
+            best_dx = 0;
+            best_dy = static_cast<int>(d);
+          }
+        }
+      }
+      if (want_down) {
+        const int64_t d = maxShiftY(false);
+        if (d > 0) {
+          const int64_t new_cost = costToTor(t.x, t.y - static_cast<int>(d), t);
+          if (new_cost < best_new_cost) {
+            best_new_cost = new_cost;
+            best_dx = 0;
+            best_dy = -static_cast<int>(d);
+          }
+        }
+      }
+
+      if (best_dx != 0 || best_dy != 0) {
+        t.x += best_dx;
+        t.y += best_dy;
+        ++moves_this_pass;
+      }
+      tree.insert({Point(t.x, t.y), idx});
+    }
+
+    total_moves += moves_this_pass;
+    if (moves_this_pass == 0) {
+      break;
+    }
+    ++pass;
+  }
+
+  if (logger_) {
+    logger_->info(utl::MDM,
+                  38,
+                  "TerminalLegalizer: r-tree refinement moved {} terminals "
+                  "over {} pass(es).",
+                  total_moves,
+                  pass + 1);
   }
 }
 

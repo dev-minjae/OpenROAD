@@ -47,6 +47,13 @@ class TerminalLegalizer
     // max_candidate_radius if the matching is infeasible.
     int candidate_radius = 2;
     int max_candidate_radius = 16;
+
+    // Phase 2: lift the grid restriction and let every terminal slide
+    // toward its TOR along each cardinal axis, stopping either at the
+    // TOR boundary or at the nearest neighbour that blocks spacing
+    // (`min(|dx|, |dy|) >= step_x` on X, `>= step_y` on Y). Paper §IV.E
+    // post-matching refinement.
+    bool run_rtree_refinement = true;
   };
 
   struct Terminal
@@ -57,9 +64,14 @@ class TerminalLegalizer
     int tor_xhi = 0;
     int tor_ylo = 0;
     int tor_yhi = 0;
-    // Assigned grid index (filled by legalize()).
+    // Assigned grid index (post-matching / greedy).
     int gi = 0;
     int gj = 0;
+    // Final terminal coordinate in DBU. Starts at grid-cell centre after
+    // Phase 1 assignment and may be shifted off-grid by Phase 2
+    // refinement, as long as the spacing constraint is preserved.
+    int x = 0;
+    int y = 0;
   };
 
   TerminalLegalizer(utl::Logger* logger, const Config& cfg);
@@ -107,6 +119,17 @@ class TerminalLegalizer
   // Pair-swap refinement. Safe on any valid assignment (no-ops if already
   // locally optimal) and used after matching or greedy placement.
   void runPairSwap();
+
+  // Paper §IV.E post-matching: lift the grid restriction and slide each
+  // terminal along cardinal axes toward its TOR, respecting the spacing
+  // constraint. Uses a boost.geometry r*-tree to find blocking
+  // neighbours quickly.
+  void runRtreeRefinement();
+
+  // Sync Terminal::x/Terminal::y with Terminal::gi/Terminal::gj. Called
+  // after the grid-based steps so refinement starts from exact grid
+  // centres.
+  void syncCoordsFromGrid();
 
   utl::Logger* logger_ = nullptr;
   Config cfg_;

@@ -682,10 +682,8 @@ void MultiDieManager::writeICCAD2022Output(const string& file_name)
   const auto& terms = legalizer.terminals();
   out << "NumTerminals " << terms.size() << '\n';
   for (const auto& term : terms) {
-    const int cx = legalizer.gridCenterX(term.gi);
-    const int cy = legalizer.gridCenterY(term.gj);
-    out << "Terminal " << term.name << ' ' << cx / scale << ' ' << cy / scale
-        << '\n';
+    out << "Terminal " << term.name << ' ' << term.x / scale << ' '
+        << term.y / scale << '\n';
   }
 }
 
