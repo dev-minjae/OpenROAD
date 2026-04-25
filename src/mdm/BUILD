@@ -14,6 +14,8 @@ package(
 cc_library(
     name = "mdm",
     srcs = [
+        "src/CellsLegalizer.cpp",
+        "src/CellsLegalizer.h",
         "src/MakeMultiDieManager.cpp",
         "src/MultiDieManager.cpp",
         "src/SemiLegalizer.cpp",

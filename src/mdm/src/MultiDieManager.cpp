@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "CellsLegalizer.h"
 #include "SemiLegalizer.h"
 #include "TerminalLegalizer.h"
 #include "TestCaseManager.h"
@@ -77,8 +78,14 @@ void MultiDieManager::multiDieDetailPlacement(int max_displacement_x,
 ////////////////////////////////////////////////////////////////
 
 void MultiDieManager::runSemiLegalizer(const std::string& target_die,
-                                       bool use_abacus)
+                                       bool use_abacus,
+                                       bool use_cells_dynamic_row)
 {
+  if (use_cells_dynamic_row) {
+    CellsLegalizer legalizer(db_, logger_);
+    legalizer.run(target_die);
+    return;
+  }
   SemiLegalizer legalizer(db_, logger_);
   legalizer.run(use_abacus, target_die);
 }

@@ -100,11 +100,12 @@ proc multi_die_detail_placement { args } {
 
 sta::define_cmd_args "run_semi_legalizer" {\
   [-target_die target_die] \
-  [-no_abacus]}
+  [-no_abacus] \
+  [-no_cells_dynamic_row]}
 
 proc run_semi_legalizer { args } {
   sta::parse_key_args "run_semi_legalizer" args \
-    keys {-target_die} flags {-no_abacus}
+    keys {-target_die} flags {-no_abacus -no_cells_dynamic_row}
 
   set target ""
   if { [info exists keys(-target_die)] } {
@@ -117,7 +118,11 @@ proc run_semi_legalizer { args } {
   if { [info exists flags(-no_abacus)] } {
     set use_abacus false
   }
-  mdm::run_semi_legalizer $target $use_abacus
+  set use_cells_dynamic_row true
+  if { [info exists flags(-no_cells_dynamic_row)] } {
+    set use_cells_dynamic_row false
+  }
+  mdm::run_semi_legalizer $target $use_abacus $use_cells_dynamic_row
 }
 
 sta::define_cmd_args "get_3d_hpwl" {[-exact]}

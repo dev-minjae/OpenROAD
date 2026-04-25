@@ -73,9 +73,11 @@ multi_die_detail_placement(int max_displacement_x = 0,
 
 void
 run_semi_legalizer(const std::string& target_die = "",
-                   bool use_abacus = true)
+                   bool use_abacus = true,
+                   bool use_cells_dynamic_row = true)
 {
-  getMultiDieManager()->runSemiLegalizer(target_die, use_abacus);
+  getMultiDieManager()->runSemiLegalizer(
+      target_die, use_abacus, use_cells_dynamic_row);
 }
 
 void

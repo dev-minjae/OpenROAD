@@ -51,8 +51,12 @@ class MultiDieManager
 
   // Abacus-based row legalizer for child dies. Used for ICCAD 2022 fine-grid
   // scenarios where Opendp cannot converge. target_die: ""/"top"/"bottom".
+  // When use_cells_dynamic_row is true (default) the new CellsLegalizer is
+  // used; the legacy SemiLegalizer remains accessible via
+  // -no_cells_dynamic_row.
   void runSemiLegalizer(const std::string& target_die = "",
-                        bool use_abacus = true);
+                        bool use_abacus = true,
+                        bool use_cells_dynamic_row = true);
 
   // 3D IC configuration. Calling set3DIC triggers splitInstances: read the
   // partition file (or fall back to a half/half split), create child blocks

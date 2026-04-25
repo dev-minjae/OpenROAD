@@ -13,6 +13,7 @@ swig_lib(NAME      mdm
 
 target_sources(mdm
   PRIVATE
+    src/CellsLegalizer.cpp
     src/MakeMultiDieManager.cpp
     src/MultiDieManager.cpp
     src/SemiLegalizer.cpp
