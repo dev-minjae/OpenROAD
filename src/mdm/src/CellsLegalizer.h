@@ -59,13 +59,23 @@ class CellsLegalizer
                 int row_xmin,
                 int row_xmax);
 
-  // Stage 3.1: append-only insert. Stage 3.2 will replace this with a true
-  // mid-row insert that does cascade-merge in both directions.
+  // Stage 3.2 contract: when the row is empty or the new cell sits to the
+  // right of the tail cluster, fall back to SemiLegalizer's append/new-
+  // cluster decision so left-x ascending input lands bit-identically.
+  // Mid-row insert (single-cell cluster + two-sided cascadeMerge) is
+  // wired up but only triggers once Stage 3.3 introduces a driver that
+  // calls insertCell with cells out of left-x order.
   void insertCell(Row& row, odb::dbInst* inst, int row_xmin, int row_xmax);
 
-  // Stage 3.1: backward collapse — only the last cluster can move because
-  // every insert lands at the tail.
-  void collapse(Row& row, int row_xmin, int row_xmax);
+  // Fixed-point cascade: from `it`, alternately merge an overlapping right
+  // neighbour into `it` or merge `it` into an overlapping left neighbour
+  // (substituting `it` with the predecessor in that case). Iterates until
+  // both sides are clear. Erasing one cluster per iteration guarantees
+  // termination.
+  void cascadeMerge(Row& row, Row::iterator it, int row_xmin, int row_xmax);
+
+  // Recompute xc = q/e and clamp to [row_xmin, row_xmax - w].
+  void recomputeCenter(Cluster& cluster, int row_xmin, int row_xmax) const;
 
   // Walk the row in key order, packing cells left-to-right inside their
   // cluster. Y is preserved (set by the caller before placeRow).

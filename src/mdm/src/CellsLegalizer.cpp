@@ -168,93 +168,118 @@ void CellsLegalizer::placeRow(const std::vector<odb::dbInst*>& cells,
   Row row;
   for (odb::dbInst* inst : cells) {
     insertCell(row, inst, row_xmin, row_xmax);
-    collapse(row, row_xmin, row_xmax);
   }
   commitPlacement(row);
 }
 
+void CellsLegalizer::recomputeCenter(Cluster& cluster,
+                                     int row_xmin,
+                                     int row_xmax) const
+{
+  cluster.xc = cluster.q / cluster.e;
+  if (cluster.xc < row_xmin) {
+    cluster.xc = row_xmin;
+  }
+  if (cluster.xc + cluster.w > row_xmax) {
+    cluster.xc = row_xmax - cluster.w;
+  }
+}
+
 void CellsLegalizer::insertCell(Row& row,
                                 odb::dbInst* inst,
-                                int /*row_xmin*/,
-                                int /*row_xmax*/)
+                                int row_xmin,
+                                int row_xmax)
 {
   const double inst_x = static_cast<double>(inst->getLocation().x());
   const double inst_w = static_cast<double>(instWidth(inst));
   const double inst_e = 1.0;  // no fixed-cell weighting in this port
 
-  const auto add_to_cluster = [&](Cluster& c) {
-    c.cells.push_back(inst);
-    c.q += inst_e * (inst_x - c.w);
-    c.e += inst_e;
-    c.w += inst_w;
-  };
-
-  // Stage 3.1: cells arrive left-to-right; we only ever append to the tail.
-  if (row.empty()) {
-    Cluster c;
-    c.xc = inst_x;
-    c.q = inst_e * inst_x;
-    c.e = inst_e;
-    c.w = inst_w;
-    c.cells.push_back(inst);
-    const int key = static_cast<int>(inst_x + inst_w / 2.0);
-    row.emplace(key, std::move(c));
-    return;
-  }
-
-  Cluster& last = std::prev(row.end())->second;
-  if (last.xc + last.w <= inst_x) {
-    Cluster c;
-    c.xc = inst_x;
-    c.q = inst_e * inst_x;
-    c.e = inst_e;
-    c.w = inst_w;
-    c.cells.push_back(inst);
-    int key = static_cast<int>(inst_x + inst_w / 2.0);
-    while (row.find(key) != row.end()) {
-      ++key;  // disambiguate degenerate equal keys
+  // Stage 3.2 contract: preserve SemiLegalizer's behaviour for left-x
+  // ascending input. The cluster container is a partial-ordered map (so
+  // future stages can run a true mid-row insert via cascadeMerge), but
+  // the driver still hands cells in left-x asc order, so for the typical
+  // tail case we MUST behave exactly like SemiLegalizer:
+  //   * if the last cluster's right edge is to the left of inst_x, open a
+  //     new cluster at the tail
+  //   * otherwise, append inst to the last cluster and let cascadeMerge
+  //     pull predecessors in if recompute shifts xc enough
+  // Anything else changes the cells-in-cluster ordering relative to
+  // SemiLegalizer and degrades HPWL on cells whose current x has been
+  // shuffled by prior placeRow calls.
+  if (!row.empty()) {
+    auto last_it = std::prev(row.end());
+    Cluster& last = last_it->second;
+    if (last.xc + last.w > inst_x) {
+      last.cells.push_back(inst);
+      last.q += inst_e * (inst_x - last.w);
+      last.e += inst_e;
+      last.w += inst_w;
+      cascadeMerge(row, last_it, row_xmin, row_xmax);
+      return;
     }
-    row.emplace(key, std::move(c));
-    return;
   }
 
-  add_to_cluster(last);
+  // No overlap with the existing tail (or row empty) — open a new cluster.
+  Cluster c;
+  c.xc = inst_x;
+  c.q = inst_e * inst_x;
+  c.e = inst_e;
+  c.w = inst_w;
+  c.cells.push_back(inst);
+  int key = static_cast<int>(inst_x + inst_w / 2.0);
+  while (row.find(key) != row.end()) {
+    ++key;
+  }
+  auto [it, inserted] = row.emplace(key, std::move(c));
+  cascadeMerge(row, it, row_xmin, row_xmax);
 }
 
-void CellsLegalizer::collapse(Row& row, int row_xmin, int row_xmax)
+void CellsLegalizer::cascadeMerge(Row& row,
+                                  Row::iterator it,
+                                  int row_xmin,
+                                  int row_xmax)
 {
-  if (row.empty()) {
-    return;
-  }
-  auto last_it = std::prev(row.end());
-  Cluster& last = last_it->second;
-  last.xc = last.q / last.e;
-  if (last.xc < row_xmin) {
-    last.xc = row_xmin;
-  }
-  if (last.xc + last.w > row_xmax) {
-    last.xc = row_xmax - last.w;
-  }
+  // Fixed-point cascade: at every step recompute it's centre, then attempt
+  // a right merge or a left merge — whichever finds an overlap first.
+  // After a merge re-enter the loop because growing `it` (or substituting
+  // `it = prev_it`) can expose a freshly-overlapping neighbour on either
+  // side. Terminating: every iteration that takes a merge erases one
+  // node, and the row size is finite.
+  while (true) {
+    recomputeCenter(it->second, row_xmin, row_xmax);
 
-  if (row.size() < 2) {
-    return;
-  }
-  auto prev_it = std::prev(last_it);
-  Cluster& prev = prev_it->second;
-  if (prev.xc + prev.w <= last.xc) {
-    return;  // no overlap
-  }
+    // Right merge: `next` overlaps and must fold into `it`.
+    auto next_it = std::next(it);
+    if (next_it != row.end()
+        && it->second.xc + it->second.w > next_it->second.xc) {
+      Cluster& cur = it->second;
+      Cluster& next = next_it->second;
+      cur.cells.insert(cur.cells.end(), next.cells.begin(), next.cells.end());
+      cur.q += next.q - next.e * cur.w;
+      cur.e += next.e;
+      cur.w += next.w;
+      row.erase(next_it);
+      continue;
+    }
 
-  // Merge `last` into `prev`. Abacus invariant:
-  //   q_new = q_a + q_b - e_b * w_a
-  //   e_new = e_a + e_b
-  //   w_new = w_a + w_b
-  prev.cells.insert(prev.cells.end(), last.cells.begin(), last.cells.end());
-  prev.q += last.q - last.e * prev.w;
-  prev.e += last.e;
-  prev.w += last.w;
-  row.erase(last_it);
-  collapse(row, row_xmin, row_xmax);
+    // Left merge: `prev` overlaps so `it` folds into `prev`.
+    if (it != row.begin()) {
+      auto prev_it = std::prev(it);
+      if (prev_it->second.xc + prev_it->second.w > it->second.xc) {
+        Cluster& prev = prev_it->second;
+        Cluster& cur = it->second;
+        prev.cells.insert(prev.cells.end(), cur.cells.begin(), cur.cells.end());
+        prev.q += cur.q - cur.e * prev.w;
+        prev.e += cur.e;
+        prev.w += cur.w;
+        row.erase(it);
+        it = prev_it;
+        continue;
+      }
+    }
+
+    break;  // both neighbours are clear of `it`
+  }
 }
 
 void CellsLegalizer::commitPlacement(Row& row)
