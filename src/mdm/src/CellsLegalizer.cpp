@@ -56,9 +56,21 @@ void CellsLegalizer::run(const std::string& target_die)
   }
 }
 
-// Best-row driver — mirrors SemiLegalizer::runAbacus(block) so that Stage 3.1
-// reproduces SemiLegalizer's behaviour exactly. Stage 3.2 will lift the
-// "left-x asc" insertion order assumption inside placeRow.
+// Best-row driver — Stage 3.3 swap: rows hold persistent cluster maps
+// instead of cell vectors that get re-clustered from scratch on every
+// trial. Each trial copies the candidate row's std::map (snapshot),
+// calls insertCell (which returns an iterator to inst's cluster), reads
+// inst's predicted x via predictX, and restores the row by moving the
+// snapshot back. Width capacity is tracked with a per-row counter so
+// the trial does not have to walk every cluster to compute it.
+//
+// Equivalence note (left-x asc input + tail-fast-path): q/e/w invariants
+// for a given set of cells are independent of insertion order, and
+// addCluster (left-merge) is mathematically the same operation as the
+// "rebuild placeRow" path in SemiLegalizer when those cells are processed
+// in the same left-x order. So bench remains regression-free until a
+// future stage feeds cells in non-left-x order or removes the tail-fast-
+// path entirely.
 void CellsLegalizer::legalizeBlock(odb::dbBlock* block)
 {
   target_block_ = block;
@@ -83,12 +95,15 @@ void CellsLegalizer::legalizeBlock(odb::dbBlock* block)
   std::multiset<odb::dbInst*, decltype(x_less)> inst_set(
       block->getInsts().begin(), block->getInsts().end(), x_less);
 
-  std::vector<std::vector<odb::dbInst*>> row_set(num_rows);
+  std::vector<Row> row_set(num_rows);
+  std::vector<int64_t> row_total_w(num_rows, 0);
+
   for (auto* inst : inst_set) {
     int cost_best = std::numeric_limits<int>::max();
     int row_best = 0;
     const int orig_x = inst->getLocation().x();
     const int orig_y = inst->getLocation().y();
+    const int inst_w = instWidth(inst);
     int next_down = (orig_y - y_min) / row_height;
     int next_up = next_down + 1;
 
@@ -114,16 +129,7 @@ void CellsLegalizer::legalizeBlock(odb::dbBlock* block)
         continue;
       }
 
-      inst->setLocation(orig_x, row_y);
-      auto& candidate_row = row_set[row_idx];
-      candidate_row.push_back(inst);
-
-      int total_width = 0;
-      for (auto* c : candidate_row) {
-        total_width += instWidth(c);
-      }
-      if (total_width > row_width) {
-        candidate_row.pop_back();
+      if (row_total_w[row_idx] + inst_w > row_width) {
         if (search_up) {
           ++next_up;
         } else {
@@ -132,14 +138,18 @@ void CellsLegalizer::legalizeBlock(odb::dbBlock* block)
         continue;
       }
 
-      placeRow(candidate_row, row_xmin, row_xmax);
-      const int cost = std::abs(inst->getLocation().x() - orig_x)
-                       + std::abs(inst->getLocation().y() - orig_y);
+      inst->setLocation(orig_x, row_y);
+      Row& candidate_row = row_set[row_idx];
+      Row snapshot = candidate_row;
+      auto inst_cluster = insertCell(candidate_row, inst, row_xmin, row_xmax);
+      const int trial_x = predictX(inst_cluster, inst);
+      const int cost = std::abs(trial_x - orig_x) + std::abs(row_y - orig_y);
       if (cost < cost_best) {
         cost_best = cost;
         row_best = row_idx;
       }
-      candidate_row.pop_back();
+      candidate_row = std::move(snapshot);
+
       if (search_up) {
         ++next_up;
       } else {
@@ -148,9 +158,12 @@ void CellsLegalizer::legalizeBlock(odb::dbBlock* block)
     }
 
     inst->setLocation(orig_x, y_min + row_height * row_best);
-    auto& chosen_row = row_set[row_best];
-    chosen_row.push_back(inst);
-    placeRow(chosen_row, row_xmin, row_xmax);
+    insertCell(row_set[row_best], inst, row_xmin, row_xmax);
+    row_total_w[row_best] += inst_w;
+  }
+
+  for (auto& row : row_set) {
+    commitPlacement(row);
   }
 
   logger_->info(utl::MDM,
@@ -161,15 +174,19 @@ void CellsLegalizer::legalizeBlock(odb::dbBlock* block)
                 num_rows);
 }
 
-void CellsLegalizer::placeRow(const std::vector<odb::dbInst*>& cells,
-                              int row_xmin,
-                              int row_xmax)
+int CellsLegalizer::predictX(Row::iterator inst_cluster,
+                             odb::dbInst* inst) const
 {
-  Row row;
-  for (odb::dbInst* inst : cells) {
-    insertCell(row, inst, row_xmin, row_xmax);
+  int x = static_cast<int>(inst_cluster->second.xc);
+  for (odb::dbInst* c : inst_cluster->second.cells) {
+    if (c == inst) {
+      return x;
+    }
+    x += instWidth(c);
   }
-  commitPlacement(row);
+  // Should never happen: caller guarantees inst was just inserted into
+  // this cluster.
+  return x;
 }
 
 void CellsLegalizer::recomputeCenter(Cluster& cluster,
@@ -185,27 +202,25 @@ void CellsLegalizer::recomputeCenter(Cluster& cluster,
   }
 }
 
-void CellsLegalizer::insertCell(Row& row,
-                                odb::dbInst* inst,
-                                int row_xmin,
-                                int row_xmax)
+CellsLegalizer::Row::iterator CellsLegalizer::insertCell(Row& row,
+                                                         odb::dbInst* inst,
+                                                         int row_xmin,
+                                                         int row_xmax)
 {
   const double inst_x = static_cast<double>(inst->getLocation().x());
   const double inst_w = static_cast<double>(instWidth(inst));
   const double inst_e = 1.0;  // no fixed-cell weighting in this port
 
-  // Stage 3.2 contract: preserve SemiLegalizer's behaviour for left-x
-  // ascending input. The cluster container is a partial-ordered map (so
-  // future stages can run a true mid-row insert via cascadeMerge), but
-  // the driver still hands cells in left-x asc order, so for the typical
-  // tail case we MUST behave exactly like SemiLegalizer:
-  //   * if the last cluster's right edge is to the left of inst_x, open a
-  //     new cluster at the tail
+  // Tail-fast-path: preserve SemiLegalizer's behaviour for left-x
+  // ascending input. The cluster container is a partial-ordered map, but
+  // the Stage 3.3 driver still hands cells in left-x asc order, so for
+  // the typical tail case we behave exactly like SemiLegalizer:
+  //   * if the last cluster's right edge is to the left of inst_x, open
+  //     a new cluster at the tail
   //   * otherwise, append inst to the last cluster and let cascadeMerge
   //     pull predecessors in if recompute shifts xc enough
-  // Anything else changes the cells-in-cluster ordering relative to
-  // SemiLegalizer and degrades HPWL on cells whose current x has been
-  // shuffled by prior placeRow calls.
+  // Stage 3.3c will remove this guard once we are ready to feed cells in
+  // non-left-x order or insert in the middle of the row.
   if (!row.empty()) {
     auto last_it = std::prev(row.end());
     Cluster& last = last_it->second;
@@ -214,8 +229,7 @@ void CellsLegalizer::insertCell(Row& row,
       last.q += inst_e * (inst_x - last.w);
       last.e += inst_e;
       last.w += inst_w;
-      cascadeMerge(row, last_it, row_xmin, row_xmax);
-      return;
+      return cascadeMerge(row, last_it, row_xmin, row_xmax);
     }
   }
 
@@ -231,13 +245,13 @@ void CellsLegalizer::insertCell(Row& row,
     ++key;
   }
   auto [it, inserted] = row.emplace(key, std::move(c));
-  cascadeMerge(row, it, row_xmin, row_xmax);
+  return cascadeMerge(row, it, row_xmin, row_xmax);
 }
 
-void CellsLegalizer::cascadeMerge(Row& row,
-                                  Row::iterator it,
-                                  int row_xmin,
-                                  int row_xmax)
+CellsLegalizer::Row::iterator CellsLegalizer::cascadeMerge(Row& row,
+                                                           Row::iterator it,
+                                                           int row_xmin,
+                                                           int row_xmax)
 {
   // Fixed-point cascade: at every step recompute it's centre, then attempt
   // a right merge or a left merge — whichever finds an overlap first.
@@ -280,6 +294,7 @@ void CellsLegalizer::cascadeMerge(Row& row,
 
     break;  // both neighbours are clear of `it`
   }
+  return it;
 }
 
 void CellsLegalizer::commitPlacement(Row& row)
