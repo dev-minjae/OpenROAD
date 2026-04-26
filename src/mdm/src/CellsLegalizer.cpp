@@ -568,50 +568,51 @@ void CellsLegalizer::pairSwap(odb::dbBlock* block)
         }
       }
     }
-    // Cross-row swap: for every (row r, row r+1) pair, look for cells
-    // of equal width that would benefit from trading rows. With matching
-    // widths the swap is just an exchange of the two cells' (x, y), so
-    // the slots in both rows stay packed identically — no shifting of
-    // any other cell is needed. The 3D-aware pairNetsHPWL drives the
-    // accept condition. To bound runtime we only consider candidates
-    // within a small x-window: for each cell A in row r we slide a
-    // pointer through cells_rp that have already passed A's right edge
-    // and try the next kCandidates cells starting from there.
+    // Cross-row swap: for every row r, look in rows r+1..r+kMaxRowDist
+    // for cells of equal width that would benefit from trading rows.
+    // With matching widths the swap is just an exchange of the two
+    // cells' (x, y), so each row's packing is preserved exactly — no
+    // shifting of any other cell is needed. The 3D-aware pairNetsHPWL
+    // drives the accept condition. Runtime is bounded by a small
+    // x-window (kCandidates) plus a small row window (kMaxRowDist).
     constexpr int kCandidates = 8;
+    constexpr int kMaxRowDist = 3;
     for (int r = 0; r + 1 < num_rows; ++r) {
       auto& cells_r = row_cells[r];
-      auto& cells_rp = row_cells[r + 1];
-      size_t j_start = 0;
-      for (size_t i = 0; i < cells_r.size(); ++i) {
-        odb::dbInst* a = cells_r[i];
-        const int wa = instWidth(a);
-        const int xa = a->getLocation().x();
-        const int ya = a->getLocation().y();
-        while (j_start < cells_rp.size()
-               && cells_rp[j_start]->getLocation().x()
-                          + instWidth(cells_rp[j_start])
-                      <= xa) {
-          ++j_start;
-        }
-        const size_t j_end = std::min(cells_rp.size(), j_start + kCandidates);
-        for (size_t j = j_start; j < j_end; ++j) {
-          odb::dbInst* b = cells_rp[j];
-          if (instWidth(b) != wa) {
-            continue;  // matching widths only
+      for (int dr = 1; dr <= kMaxRowDist && r + dr < num_rows; ++dr) {
+        auto& cells_rp = row_cells[r + dr];
+        size_t j_start = 0;
+        for (size_t i = 0; i < cells_r.size(); ++i) {
+          odb::dbInst* a = cells_r[i];
+          const int wa = instWidth(a);
+          const int xa = a->getLocation().x();
+          const int ya = a->getLocation().y();
+          while (j_start < cells_rp.size()
+                 && cells_rp[j_start]->getLocation().x()
+                            + instWidth(cells_rp[j_start])
+                        <= xa) {
+            ++j_start;
           }
-          const int xb = b->getLocation().x();
-          const int yb = b->getLocation().y();
-          const int64_t hpwl_before = pairNetsHPWL(a, b);
-          a->setLocation(xb, yb);
-          b->setLocation(xa, ya);
-          const int64_t hpwl_after = pairNetsHPWL(a, b);
-          if (hpwl_after < hpwl_before) {
-            std::swap(cells_r[i], cells_rp[j]);
-            ++pass_swaps;
-            break;  // proceed to next i; cells_r[i] is now the new cell
+          const size_t j_end = std::min(cells_rp.size(), j_start + kCandidates);
+          for (size_t j = j_start; j < j_end; ++j) {
+            odb::dbInst* b = cells_rp[j];
+            if (instWidth(b) != wa) {
+              continue;  // matching widths only
+            }
+            const int xb = b->getLocation().x();
+            const int yb = b->getLocation().y();
+            const int64_t hpwl_before = pairNetsHPWL(a, b);
+            a->setLocation(xb, yb);
+            b->setLocation(xa, ya);
+            const int64_t hpwl_after = pairNetsHPWL(a, b);
+            if (hpwl_after < hpwl_before) {
+              std::swap(cells_r[i], cells_rp[j]);
+              ++pass_swaps;
+              break;  // proceed to next i; cells_r[i] is now the new cell
+            }
+            a->setLocation(xa, ya);
+            b->setLocation(xb, yb);
           }
-          a->setLocation(xa, ya);
-          b->setLocation(xb, yb);
         }
       }
     }
