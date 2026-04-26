@@ -211,29 +211,17 @@ CellsLegalizer::Row::iterator CellsLegalizer::insertCell(Row& row,
   const double inst_w = static_cast<double>(instWidth(inst));
   const double inst_e = 1.0;  // no fixed-cell weighting in this port
 
-  // Tail-fast-path: preserve SemiLegalizer's behaviour for left-x
-  // ascending input. The cluster container is a partial-ordered map, but
-  // the Stage 3.3 driver still hands cells in left-x asc order, so for
-  // the typical tail case we behave exactly like SemiLegalizer:
-  //   * if the last cluster's right edge is to the left of inst_x, open
-  //     a new cluster at the tail
-  //   * otherwise, append inst to the last cluster and let cascadeMerge
-  //     pull predecessors in if recompute shifts xc enough
-  // Stage 3.3c will remove this guard once we are ready to feed cells in
-  // non-left-x order or insert in the middle of the row.
-  if (!row.empty()) {
-    auto last_it = std::prev(row.end());
-    Cluster& last = last_it->second;
-    if (last.xc + last.w > inst_x) {
-      last.cells.push_back(inst);
-      last.q += inst_e * (inst_x - last.w);
-      last.e += inst_e;
-      last.w += inst_w;
-      return cascadeMerge(row, last_it, row_xmin, row_xmax);
-    }
-  }
-
-  // No overlap with the existing tail (or row empty) — open a new cluster.
+  // Always open a singleton cluster at inst's centre-x, then cascadeMerge
+  // resolves overlaps in either direction. For left-x ascending input the
+  // result is mathematically identical to a tail-append + collapse path:
+  // recomputeCenter clamps xc to inst_x (within row bounds), so the only
+  // overlap that fires is a left-merge into the existing tail, and the
+  // q/e/w arithmetic of `prev.q += cur.q - cur.e * prev.w` reduces to
+  // `prev.q += inst_x - prev.w` — exactly addCell's update. The cluster
+  // identity (key) survives because cascadeMerge erases the singleton
+  // when left-merging into the existing tail. For non-left-x input
+  // (Stage 3.3d and beyond), this same path inserts in the middle of
+  // the map and cascadeMerge resolves overlaps both ways.
   Cluster c;
   c.xc = inst_x;
   c.q = inst_e * inst_x;

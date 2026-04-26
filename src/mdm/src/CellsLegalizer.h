@@ -57,13 +57,12 @@ class CellsLegalizer
 
   void legalizeBlock(odb::dbBlock* block);
 
-  // Stage 3.3 contract: insert `inst` into the partial-ordered row map,
-  // run cascadeMerge to absorb overlapping neighbours, and return the
-  // iterator to the cluster that now contains `inst`. The tail-fast-path
-  // (append to last cluster when the new cell sits inside its right edge)
-  // is preserved so left-x ascending input behaves exactly like
-  // SemiLegalizer's Abacus path; future stages will remove that path to
-  // unlock true mid-row insert.
+  // Insert `inst` into the partial-ordered row map as a singleton cluster
+  // keyed by its centre-x, then cascadeMerge to absorb any overlap with
+  // neighbours in either direction. Returns the iterator to the cluster
+  // that now contains `inst`. For left-x ascending input this collapses
+  // to a left-merge into the existing tail and is mathematically
+  // identical to SemiLegalizer's addCell + collapse path.
   Row::iterator insertCell(Row& row,
                            odb::dbInst* inst,
                            int row_xmin,
