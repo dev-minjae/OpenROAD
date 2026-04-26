@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <initializer_list>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -113,6 +114,12 @@ class CellsLegalizer
   // by buildSiblingCache before the swap loop and stays valid because
   // only `block`'s own cells move during this pairSwap call.
   int64_t pairNetsHPWL(odb::dbInst* a, odb::dbInst* b) const;
+
+  // Generalisation of pairNetsHPWL to N cells. Aggregates the distinct
+  // nets touching any of `insts` and applies the same 3D-aware HPWL
+  // formula. Used by the triple-cell rotation pass to score multi-cell
+  // moves under one consistent cost model.
+  int64_t groupNetsHPWL(std::initializer_list<odb::dbInst*> insts) const;
 
   // Build sibling_bbox_cache_ for every intersected net in `block`.
   // Sibling lookup walks the BTerm/iTerm/BTerm chain that get3DHPWL

@@ -179,15 +179,18 @@ void CellsLegalizer::legalizeBlock(odb::dbBlock* block)
 
 int64_t CellsLegalizer::pairNetsHPWL(odb::dbInst* a, odb::dbInst* b) const
 {
+  return groupNetsHPWL({a, b});
+}
+
+int64_t CellsLegalizer::groupNetsHPWL(
+    std::initializer_list<odb::dbInst*> insts) const
+{
   std::set<odb::dbNet*> nets;
-  for (auto* iterm : a->getITerms()) {
-    if (auto* net = iterm->getNet()) {
-      nets.insert(net);
-    }
-  }
-  for (auto* iterm : b->getITerms()) {
-    if (auto* net = iterm->getNet()) {
-      nets.insert(net);
+  for (odb::dbInst* inst : insts) {
+    for (auto* iterm : inst->getITerms()) {
+      if (auto* net = iterm->getNet()) {
+        nets.insert(net);
+      }
     }
   }
   int64_t total = 0;
@@ -338,6 +341,100 @@ void CellsLegalizer::pairSwap(odb::dbBlock* block)
             a->setLocation(xa, a->getLocation().y());
             b->setLocation(xb, b->getLocation().y());
           }
+        }
+      }
+      // Triple-cell rotation: for adjacent (i, i+1, i+2), score the
+      // identity + reverse + rotate-left + rotate-right permutations
+      // and apply the cheapest. Each permutation re-packs left-justified
+      // into [xa, xa + wa + wb + wc], which never extends past the
+      // original right edge (sum of widths is unchanged). This unlocks
+      // moves the dist-1 / dist-2 swap pass cannot express, e.g. when
+      // the middle cell wants to swap with both neighbours
+      // simultaneously.
+      for (size_t i = 0; i + 2 < cells.size(); ++i) {
+        odb::dbInst* a = cells[i];
+        odb::dbInst* b = cells[i + 1];
+        odb::dbInst* c = cells[i + 2];
+        const int xa = a->getLocation().x();
+        const int xb = b->getLocation().x();
+        const int xc = c->getLocation().x();
+        const int wa = instWidth(a);
+        const int wb = instWidth(b);
+        const int wc = instWidth(c);
+        const int y_a = a->getLocation().y();
+        const int y_b = b->getLocation().y();
+        const int y_c = c->getLocation().y();
+        const int64_t hpwl_id = groupNetsHPWL({a, b, c});
+
+        int64_t best_hpwl = hpwl_id;
+        int best_perm = 0;  // 0=id, 1=reverse, 2=rot-L, 3=rot-R
+
+        // Reverse: C, B, A.
+        c->setLocation(xa, y_c);
+        b->setLocation(xa + wc, y_b);
+        a->setLocation(xa + wc + wb, y_a);
+        const int64_t hpwl_rev = groupNetsHPWL({a, b, c});
+        if (hpwl_rev < best_hpwl) {
+          best_hpwl = hpwl_rev;
+          best_perm = 1;
+        }
+        // Rotate-left: B, C, A.
+        b->setLocation(xa, y_b);
+        c->setLocation(xa + wb, y_c);
+        a->setLocation(xa + wb + wc, y_a);
+        const int64_t hpwl_rotl = groupNetsHPWL({a, b, c});
+        if (hpwl_rotl < best_hpwl) {
+          best_hpwl = hpwl_rotl;
+          best_perm = 2;
+        }
+        // Rotate-right: C, A, B.
+        c->setLocation(xa, y_c);
+        a->setLocation(xa + wc, y_a);
+        b->setLocation(xa + wc + wa, y_b);
+        const int64_t hpwl_rotr = groupNetsHPWL({a, b, c});
+        if (hpwl_rotr < best_hpwl) {
+          best_hpwl = hpwl_rotr;
+          best_perm = 3;
+        }
+
+        // Apply the chosen permutation. Note: cells currently sit in
+        // rot-right configuration from the last test; rewrite for the
+        // chosen permutation explicitly so each branch is self-contained.
+        switch (best_perm) {
+          case 0:
+            a->setLocation(xa, y_a);
+            b->setLocation(xb, y_b);
+            c->setLocation(xc, y_c);
+            break;
+          case 1:
+            c->setLocation(xa, y_c);
+            b->setLocation(xa + wc, y_b);
+            a->setLocation(xa + wc + wb, y_a);
+            std::swap(cells[i], cells[i + 2]);
+            ++pass_swaps;
+            break;
+          case 2:
+            b->setLocation(xa, y_b);
+            c->setLocation(xa + wb, y_c);
+            a->setLocation(xa + wb + wc, y_a);
+            {
+              odb::dbInst* tmp = cells[i];
+              cells[i] = cells[i + 1];
+              cells[i + 1] = cells[i + 2];
+              cells[i + 2] = tmp;
+            }
+            ++pass_swaps;
+            break;
+          case 3:
+            // Already in rot-right config; just commit cells[] order.
+            {
+              odb::dbInst* tmp = cells[i + 2];
+              cells[i + 2] = cells[i + 1];
+              cells[i + 1] = cells[i];
+              cells[i] = tmp;
+            }
+            ++pass_swaps;
+            break;
         }
       }
     }
