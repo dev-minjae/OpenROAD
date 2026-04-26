@@ -285,9 +285,15 @@ void CellsLegalizer::pairSwap(odb::dbBlock* block)
               });
   }
 
-  // Iterate until a pass produces no accepted swaps. Cap at kMaxPasses
-  // so a pathological design cannot loop forever.
+  // Each pass tries swaps at distances 1..kMaxDist. Distance-1 always
+  // legalises by re-packing the pair left-justified into the same
+  // combined slot. Distance-d swaps with d>1 require equal widths so
+  // the cells in between can stay in place. The 3D-aware cost in
+  // pairNetsHPWL filters out swaps that would shrink one die's bbox at
+  // the cost of growing the TOR-adjusted contribution; without that we
+  // saw 2D-only dist>1 swaps regress on case3 (+0.30%).
   constexpr int kMaxPasses = 8;
+  constexpr int kMaxDist = 4;
   int total_swaps = 0;
   for (int pass = 0; pass < kMaxPasses; ++pass) {
     int pass_swaps = 0;
@@ -298,10 +304,8 @@ void CellsLegalizer::pairSwap(odb::dbBlock* block)
         const int xa = a->getLocation().x();
         const int xb = b->getLocation().x();
         const int wb = instWidth(b);
-        // Swap leaves total span [xa, xb + wb] unchanged. The new
-        // positions are b at xa, a at xa + wb. xa + wb + wa = xa + wa
-        // + wb <= xb + wb because xa + wa <= xb (legality), so the
-        // pair never extends past its original right edge.
+        // Distance-1 swap: re-pack pair left-justified. Always legal
+        // because xa + wa + wb <= xb + wb (xa + wa <= xb pre-swap).
         const int64_t hpwl_before = pairNetsHPWL(a, b);
         a->setLocation(xa + wb, a->getLocation().y());
         b->setLocation(xa, b->getLocation().y());
@@ -312,6 +316,28 @@ void CellsLegalizer::pairSwap(odb::dbBlock* block)
         } else {
           a->setLocation(xa, a->getLocation().y());
           b->setLocation(xb, b->getLocation().y());
+        }
+      }
+      for (int dist = 2; dist <= kMaxDist; ++dist) {
+        for (size_t i = 0; i + dist < cells.size(); ++i) {
+          odb::dbInst* a = cells[i];
+          odb::dbInst* b = cells[i + dist];
+          if (instWidth(a) != instWidth(b)) {
+            continue;  // distance > 1 needs equal widths to stay legal
+          }
+          const int xa = a->getLocation().x();
+          const int xb = b->getLocation().x();
+          const int64_t hpwl_before = pairNetsHPWL(a, b);
+          a->setLocation(xb, a->getLocation().y());
+          b->setLocation(xa, b->getLocation().y());
+          const int64_t hpwl_after = pairNetsHPWL(a, b);
+          if (hpwl_after < hpwl_before) {
+            std::swap(cells[i], cells[i + dist]);
+            ++pass_swaps;
+          } else {
+            a->setLocation(xa, a->getLocation().y());
+            b->setLocation(xb, b->getLocation().y());
+          }
         }
       }
     }
