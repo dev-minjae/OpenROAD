@@ -92,6 +92,20 @@ class CellsLegalizer
   // cluster. Y is preserved (set when the caller committed each cell).
   void commitPlacement(Row& row);
 
+  // Post-legalization HPWL refinement. Sweeps each row left-to-right
+  // and tries swapping adjacent cells (within their tight pair span).
+  // A swap is accepted if the total HPWL of the two cells' incident
+  // nets goes down. Multiple passes until no swap is accepted (or the
+  // pass cap kicks in). Cluster invariants are preserved because the
+  // post-swap pair occupies the same combined slot.
+  void pairSwap(odb::dbBlock* block);
+
+  // HPWL contribution of all distinct nets touching either cell, summed
+  // as bbox.dx() + bbox.dy(). Uses dbNet::getTermBBox which recomputes
+  // from current pin positions, so the caller must already have moved
+  // the cells before calling this for the post-swap measurement.
+  int64_t pairNetsHPWL(odb::dbInst* a, odb::dbInst* b) const;
+
   static int instWidth(odb::dbInst* inst);
 
   odb::dbDatabase* db_ = nullptr;

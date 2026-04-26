@@ -3,6 +3,7 @@
 
 #include "CellsLegalizer.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iterator>
 #include <limits>
@@ -166,12 +167,105 @@ void CellsLegalizer::legalizeBlock(odb::dbBlock* block)
     commitPlacement(row);
   }
 
+  pairSwap(block);
+
   logger_->info(utl::MDM,
                 50,
                 "CellsLegalizer: legalized {} ({} insts, {} rows).",
                 block->getName(),
                 block->getInsts().size(),
                 num_rows);
+}
+
+int64_t CellsLegalizer::pairNetsHPWL(odb::dbInst* a, odb::dbInst* b) const
+{
+  std::set<odb::dbNet*> nets;
+  for (auto* iterm : a->getITerms()) {
+    if (auto* net = iterm->getNet()) {
+      nets.insert(net);
+    }
+  }
+  for (auto* iterm : b->getITerms()) {
+    if (auto* net = iterm->getNet()) {
+      nets.insert(net);
+    }
+  }
+  int64_t total = 0;
+  for (auto* net : nets) {
+    const odb::Rect bbox = net->getTermBBox();
+    total += bbox.dx() + bbox.dy();
+  }
+  return total;
+}
+
+void CellsLegalizer::pairSwap(odb::dbBlock* block)
+{
+  auto rows = block->getRows();
+  if (rows.begin() == rows.end()) {
+    return;
+  }
+  const int row_height = (*rows.begin())->getBBox().dy();
+  const int y_min = (*rows.begin())->getBBox().yMin();
+  const int num_rows = static_cast<int>(rows.size());
+
+  // Group cells by their committed row.
+  std::vector<std::vector<odb::dbInst*>> row_cells(num_rows);
+  for (auto* inst : block->getInsts()) {
+    const int row_idx = (inst->getLocation().y() - y_min) / row_height;
+    if (row_idx >= 0 && row_idx < num_rows) {
+      row_cells[row_idx].push_back(inst);
+    }
+  }
+  for (auto& cells : row_cells) {
+    std::sort(cells.begin(),
+              cells.end(),
+              [](const odb::dbInst* x, const odb::dbInst* y) {
+                return x->getLocation().x() < y->getLocation().x();
+              });
+  }
+
+  // Iterate until a pass produces no accepted swaps. Cap at kMaxPasses
+  // so a pathological design cannot loop forever.
+  constexpr int kMaxPasses = 8;
+  int total_swaps = 0;
+  for (int pass = 0; pass < kMaxPasses; ++pass) {
+    int pass_swaps = 0;
+    for (auto& cells : row_cells) {
+      for (size_t i = 0; i + 1 < cells.size(); ++i) {
+        odb::dbInst* a = cells[i];
+        odb::dbInst* b = cells[i + 1];
+        const int xa = a->getLocation().x();
+        const int xb = b->getLocation().x();
+        const int wb = instWidth(b);
+        // Swap leaves total span [xa, xb + wb] unchanged. The new
+        // positions are b at xa, a at xa + wb. xa + wb + wa = xa + wa
+        // + wb <= xb + wb because xa + wa <= xb (legality), so the
+        // pair never extends past its original right edge.
+        const int64_t hpwl_before = pairNetsHPWL(a, b);
+        a->setLocation(xa + wb, a->getLocation().y());
+        b->setLocation(xa, b->getLocation().y());
+        const int64_t hpwl_after = pairNetsHPWL(a, b);
+        if (hpwl_after < hpwl_before) {
+          std::swap(cells[i], cells[i + 1]);
+          ++pass_swaps;
+        } else {
+          a->setLocation(xa, a->getLocation().y());
+          b->setLocation(xb, b->getLocation().y());
+        }
+      }
+    }
+    total_swaps += pass_swaps;
+    if (pass_swaps == 0) {
+      break;
+    }
+  }
+  if (total_swaps > 0) {
+    logger_->info(utl::MDM,
+                  54,
+                  "CellsLegalizer: pairSwap accepted {} swaps in {}.",
+                  total_swaps,
+                  block->getName());
+  }
 }
 
 int CellsLegalizer::predictX(Row::iterator inst_cluster,
