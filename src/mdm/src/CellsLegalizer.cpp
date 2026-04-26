@@ -192,10 +192,66 @@ int64_t CellsLegalizer::pairNetsHPWL(odb::dbInst* a, odb::dbInst* b) const
   }
   int64_t total = 0;
   for (auto* net : nets) {
-    const odb::Rect bbox = net->getTermBBox();
-    total += bbox.dx() + bbox.dy();
+    odb::Rect box1 = net->getTermBBox();
+    auto sibling_it = sibling_bbox_cache_.find(net);
+    if (sibling_it == sibling_bbox_cache_.end()) {
+      total += box1.dx() + box1.dy();
+      continue;
+    }
+    // Intersected net — apply the TOR-adjusted 3D HPWL formula from
+    // MultiDieManager::get3DHPWL so the swap accept condition tracks
+    // the true 3D HPWL change rather than just the current die's
+    // 2D bbox change.
+    odb::Rect box2 = sibling_it->second;
+    odb::Rect box3;
+    if (box1.intersects(box2)) {
+      box3 = box1.intersect(box2);
+    } else {
+      std::vector<int> xs{box1.xMin(), box1.xMax(), box2.xMin(), box2.xMax()};
+      std::vector<int> ys{box1.yMin(), box1.yMax(), box2.yMin(), box2.yMax()};
+      std::sort(xs.begin(), xs.end());
+      std::sort(ys.begin(), ys.end());
+      box3.init(xs[1], ys[1], xs[2], ys[2]);
+    }
+    odb::Rect centre{
+        box3.xCenter(), box3.yCenter(), box3.xCenter(), box3.yCenter()};
+    box1.merge(centre);
+    box2.merge(centre);
+    total += box1.dx() + box1.dy();
+    total += box2.dx() + box2.dy();
   }
   return total;
+}
+
+odb::dbNet* CellsLegalizer::findSiblingNet(odb::dbNet* net)
+{
+  for (auto* bterm : net->getBTerms()) {
+    odb::dbITerm* upper = bterm->getITerm();
+    if (!upper || !upper->getNet()) {
+      continue;
+    }
+    for (auto* iterm : upper->getNet()->getITerms()) {
+      odb::dbBTerm* b = iterm->getBTerm();
+      if (b && b->getBlock() != net->getBlock()) {
+        return b->getNet();
+      }
+    }
+  }
+  return nullptr;
+}
+
+void CellsLegalizer::buildSiblingCache(odb::dbBlock* block)
+{
+  sibling_bbox_cache_.clear();
+  for (auto* net : block->getNets()) {
+    if (!odb::dbBoolProperty::find(net, "intersected")) {
+      continue;
+    }
+    odb::dbNet* sibling = findSiblingNet(net);
+    if (sibling) {
+      sibling_bbox_cache_[net] = sibling->getTermBBox();
+    }
+  }
 }
 
 void CellsLegalizer::pairSwap(odb::dbBlock* block)
@@ -207,6 +263,11 @@ void CellsLegalizer::pairSwap(odb::dbBlock* block)
   const int row_height = (*rows.begin())->getBBox().dy();
   const int y_min = (*rows.begin())->getBBox().yMin();
   const int num_rows = static_cast<int>(rows.size());
+
+  // Cache sibling-die bbox for every intersected net in this block.
+  // Sibling cells do not move during this pairSwap call (we only edit
+  // `block`'s instances), so the cache stays valid for the duration.
+  buildSiblingCache(block);
 
   // Group cells by their committed row.
   std::vector<std::vector<odb::dbInst*>> row_cells(num_rows);

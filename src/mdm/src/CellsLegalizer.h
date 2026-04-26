@@ -5,12 +5,16 @@
 
 #include <map>
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+#include "odb/geom.h"
 
 namespace odb {
 class dbBlock;
 class dbDatabase;
 class dbInst;
+class dbNet;
 }  // namespace odb
 
 namespace utl {
@@ -100,17 +104,35 @@ class CellsLegalizer
   // post-swap pair occupies the same combined slot.
   void pairSwap(odb::dbBlock* block);
 
-  // HPWL contribution of all distinct nets touching either cell, summed
-  // as bbox.dx() + bbox.dy(). Uses dbNet::getTermBBox which recomputes
-  // from current pin positions, so the caller must already have moved
-  // the cells before calling this for the post-swap measurement.
+  // 3D-HPWL contribution of all distinct nets touching either cell.
+  // Non-intersected nets contribute their 2D bbox HPWL within `block`.
+  // Intersected nets use the same TOR-adjusted formula as get3DHPWL:
+  // both dies' bboxes are merged with the centre of their shared inner
+  // box, and HPWL = box1_with_centre + box2_with_centre. The sibling
+  // (other-die) bbox is read from sibling_bbox_cache_, which is built
+  // by buildSiblingCache before the swap loop and stays valid because
+  // only `block`'s own cells move during this pairSwap call.
   int64_t pairNetsHPWL(odb::dbInst* a, odb::dbInst* b) const;
+
+  // Build sibling_bbox_cache_ for every intersected net in `block`.
+  // Sibling lookup walks the BTerm/iTerm/BTerm chain that get3DHPWL
+  // uses to pair up the two dies' representations of the same logical
+  // net. The cache stays valid until the caller next moves cells in a
+  // sibling block, so we only need to (re)build it at the start of
+  // each pairSwap call.
+  void buildSiblingCache(odb::dbBlock* block);
+
+  // Walk the BTerm chain to find `net`'s twin in the sibling die.
+  // Returns nullptr if the net is not paired (e.g., a non-intersected
+  // net or a malformed interconnect).
+  static odb::dbNet* findSiblingNet(odb::dbNet* net);
 
   static int instWidth(odb::dbInst* inst);
 
   odb::dbDatabase* db_ = nullptr;
   utl::Logger* logger_ = nullptr;
   odb::dbBlock* target_block_ = nullptr;
+  std::unordered_map<odb::dbNet*, odb::Rect> sibling_bbox_cache_;
 };
 
 }  // namespace mdm
