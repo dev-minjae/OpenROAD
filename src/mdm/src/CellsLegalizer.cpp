@@ -343,14 +343,16 @@ void CellsLegalizer::pairSwap(odb::dbBlock* block)
           }
         }
       }
+      // Triple-cell and quad-cell permutation passes. Each adjacent
+      // group is repacked left-justified, so the total span is the sum
+      // of widths and never extends past the original right edge. This
+      // is permutation-invariant in the widths, so neighbours at i-1
+      // and i+n keep their positions and cluster boundaries hold.
       // Triple-cell rotation: for adjacent (i, i+1, i+2), score the
       // identity + reverse + rotate-left + rotate-right permutations
-      // and apply the cheapest. Each permutation re-packs left-justified
-      // into [xa, xa + wa + wb + wc], which never extends past the
-      // original right edge (sum of widths is unchanged). This unlocks
-      // moves the dist-1 / dist-2 swap pass cannot express, e.g. when
-      // the middle cell wants to swap with both neighbours
-      // simultaneously.
+      // and apply the cheapest. This unlocks moves the dist-1 / dist-2
+      // swap pass cannot express, e.g. when the middle cell wants to
+      // swap with both neighbours simultaneously.
       for (size_t i = 0; i + 2 < cells.size(); ++i) {
         odb::dbInst* a = cells[i];
         odb::dbInst* b = cells[i + 1];
@@ -433,6 +435,133 @@ void CellsLegalizer::pairSwap(odb::dbBlock* block)
               cells[i + 1] = cells[i];
               cells[i] = tmp;
             }
+            ++pass_swaps;
+            break;
+        }
+      }
+      // Quad-cell permutations: for adjacent (i..i+3), score identity
+      // plus the four "non-decomposable" permutations not already
+      // reachable by combining pair swaps and triple rotations:
+      //   1) full reverse [D, C, B, A]
+      //   2) rotate-left [B, C, D, A]
+      //   3) rotate-right [D, A, B, C]
+      //   4) half-swap [C, D, A, B]
+      // Each is re-packed left-justified into the same combined slot.
+      for (size_t i = 0; i + 3 < cells.size(); ++i) {
+        odb::dbInst* a = cells[i];
+        odb::dbInst* b = cells[i + 1];
+        odb::dbInst* c = cells[i + 2];
+        odb::dbInst* d = cells[i + 3];
+        const int xa = a->getLocation().x();
+        const int xb = b->getLocation().x();
+        const int xc = c->getLocation().x();
+        const int xd = d->getLocation().x();
+        const int wa = instWidth(a);
+        const int wb = instWidth(b);
+        const int wc = instWidth(c);
+        const int wd = instWidth(d);
+        const int y_a = a->getLocation().y();
+        const int y_b = b->getLocation().y();
+        const int y_c = c->getLocation().y();
+        const int y_d = d->getLocation().y();
+        const int64_t hpwl_id = groupNetsHPWL({a, b, c, d});
+
+        int64_t best = hpwl_id;
+        int best_perm = 0;
+
+        // 1) reverse [D, C, B, A]
+        d->setLocation(xa, y_d);
+        c->setLocation(xa + wd, y_c);
+        b->setLocation(xa + wd + wc, y_b);
+        a->setLocation(xa + wd + wc + wb, y_a);
+        int64_t h = groupNetsHPWL({a, b, c, d});
+        if (h < best) {
+          best = h;
+          best_perm = 1;
+        }
+        // 2) rotate-left [B, C, D, A]
+        b->setLocation(xa, y_b);
+        c->setLocation(xa + wb, y_c);
+        d->setLocation(xa + wb + wc, y_d);
+        a->setLocation(xa + wb + wc + wd, y_a);
+        h = groupNetsHPWL({a, b, c, d});
+        if (h < best) {
+          best = h;
+          best_perm = 2;
+        }
+        // 3) rotate-right [D, A, B, C]
+        d->setLocation(xa, y_d);
+        a->setLocation(xa + wd, y_a);
+        b->setLocation(xa + wd + wa, y_b);
+        c->setLocation(xa + wd + wa + wb, y_c);
+        h = groupNetsHPWL({a, b, c, d});
+        if (h < best) {
+          best = h;
+          best_perm = 3;
+        }
+        // 4) half-swap [C, D, A, B]
+        c->setLocation(xa, y_c);
+        d->setLocation(xa + wc, y_d);
+        a->setLocation(xa + wc + wd, y_a);
+        b->setLocation(xa + wc + wd + wa, y_b);
+        h = groupNetsHPWL({a, b, c, d});
+        if (h < best) {
+          best = h;
+          best_perm = 4;
+        }
+
+        // Apply best_perm. Each branch rewrites positions explicitly
+        // and updates cells[] to match the new order.
+        switch (best_perm) {
+          case 0:
+            a->setLocation(xa, y_a);
+            b->setLocation(xb, y_b);
+            c->setLocation(xc, y_c);
+            d->setLocation(xd, y_d);
+            break;
+          case 1:  // [D, C, B, A]
+            d->setLocation(xa, y_d);
+            c->setLocation(xa + wd, y_c);
+            b->setLocation(xa + wd + wc, y_b);
+            a->setLocation(xa + wd + wc + wb, y_a);
+            std::swap(cells[i], cells[i + 3]);
+            std::swap(cells[i + 1], cells[i + 2]);
+            ++pass_swaps;
+            break;
+          case 2:  // [B, C, D, A]
+            b->setLocation(xa, y_b);
+            c->setLocation(xa + wb, y_c);
+            d->setLocation(xa + wb + wc, y_d);
+            a->setLocation(xa + wb + wc + wd, y_a);
+            {
+              odb::dbInst* tmp = cells[i];
+              cells[i] = cells[i + 1];
+              cells[i + 1] = cells[i + 2];
+              cells[i + 2] = cells[i + 3];
+              cells[i + 3] = tmp;
+            }
+            ++pass_swaps;
+            break;
+          case 3:  // [D, A, B, C]
+            // Cells are currently in case-4 (half-swap) config from the
+            // last test, so rewrite positions explicitly.
+            d->setLocation(xa, y_d);
+            a->setLocation(xa + wd, y_a);
+            b->setLocation(xa + wd + wa, y_b);
+            c->setLocation(xa + wd + wa + wb, y_c);
+            {
+              odb::dbInst* tmp = cells[i + 3];
+              cells[i + 3] = cells[i + 2];
+              cells[i + 2] = cells[i + 1];
+              cells[i + 1] = cells[i];
+              cells[i] = tmp;
+            }
+            ++pass_swaps;
+            break;
+          case 4:  // [C, D, A, B]
+            // Already in this config from the last test; commit cells[].
+            std::swap(cells[i], cells[i + 2]);
+            std::swap(cells[i + 1], cells[i + 3]);
             ++pass_swaps;
             break;
         }
