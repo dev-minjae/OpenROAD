@@ -98,4 +98,27 @@ import_coordinates(const std::string& file_name)
   getMultiDieManager()->importCoordinates(file_name);
 }
 
+void
+run_flattened_placement(double density = 1.0)
+{
+  getMultiDieManager()->runFlattenedPlacement(density);
+}
+
+void
+run_global_tier_optimization(double rho = 500.0,
+                             double alpha = 100.0,
+                             double beta = 0.5,
+                             double gamma = 0.0,
+                             bool apply = false)
+{
+  getMultiDieManager()->runGlobalTierOptimization(
+      rho, alpha, beta, gamma, apply);
+}
+
+void
+run_3d_placement(int iterations = 4, bool no_alternating = false)
+{
+  getMultiDieManager()->run3DPlacement(iterations, no_alternating);
+}
+
 %}  // inline

@@ -14,8 +14,14 @@ package(
 cc_library(
     name = "mdm",
     srcs = [
+        "src/BilevelCoordinator.cpp",
+        "src/BilevelCoordinator.h",
         "src/CellsLegalizer.cpp",
         "src/CellsLegalizer.h",
+        "src/FastTerminalLegalizer.cpp",
+        "src/FastTerminalLegalizer.h",
+        "src/GlobalTierOptimizer.cpp",
+        "src/GlobalTierOptimizer.h",
         "src/MakeMultiDieManager.cpp",
         "src/MultiDieManager.cpp",
         "src/SemiLegalizer.cpp",

@@ -15,7 +15,10 @@
 #include <string>
 #include <vector>
 
+#include "BilevelCoordinator.h"
 #include "CellsLegalizer.h"
+#include "FastTerminalLegalizer.h"
+#include "GlobalTierOptimizer.h"
 #include "SemiLegalizer.h"
 #include "TerminalLegalizer.h"
 #include "TestCaseManager.h"
@@ -698,6 +701,68 @@ void MultiDieManager::parseICCADOutput(const string& file_name,
                                        const char* which_die)
 {
   test_case_manager_->parseICCADOutput(file_name, which_die);
+}
+
+////////////////////////////////////////////////////////////////
+// Phase 4 — iPL-3D Global Tier Optimization plumbing (skeleton).
+// Bodies are filled in Phases 4.2/4.4/4.6.
+////////////////////////////////////////////////////////////////
+
+void MultiDieManager::runFlattenedPlacement(double density)
+{
+  logger_->info(utl::MDM,
+                304,
+                "runFlattenedPlacement: stub. density={}. Implemented in "
+                "Phase 4.4.",
+                density);
+}
+
+void MultiDieManager::runGlobalTierOptimization(double rho,
+                                                double alpha,
+                                                double beta,
+                                                double gamma,
+                                                bool apply)
+{
+  GlobalTierOptimizer optimizer(db_, logger_);
+  TierOptParams params;
+  params.rho = rho;
+  params.alpha = alpha;
+  params.beta = beta;
+  params.gamma = gamma;
+
+  // Phase 4.1: from/to blocks resolved trivially (top child / bottom child).
+  // Phase 4.2 will validate that `set_3D_IC` has been called.
+  odb::dbBlock* parent = db_->getChip()->getBlock();
+  if (!parent || parent->getChildren().empty()) {
+    logger_->warn(utl::MDM,
+                  305,
+                  "runGlobalTierOptimization: no child blocks; call "
+                  "`set_3D_IC` first. Skeleton no-op.");
+    return;
+  }
+  auto child_iter = parent->getChildren().begin();
+  odb::dbBlock* from_block = *child_iter;
+  ++child_iter;
+  odb::dbBlock* to_block
+      = (child_iter != parent->getChildren().end()) ? *child_iter : nullptr;
+
+  auto delta = optimizer.run(from_block, to_block, params);
+  logger_->info(utl::MDM,
+                306,
+                "runGlobalTierOptimization: returned {} cells, apply={} "
+                "(skeleton stub).",
+                delta.size(),
+                apply);
+}
+
+void MultiDieManager::run3DPlacement(int iterations, bool no_alternating)
+{
+  BilevelParams params;
+  params.M = iterations;
+  params.no_alternating = no_alternating;
+
+  BilevelCoordinator coordinator(this, replace_, logger_);
+  coordinator.run(params);
 }
 
 }  // namespace mdm

@@ -24,6 +24,16 @@ class Logger;
 
 namespace mdm {
 
+// Phase 4.7 cross-die move parameters. Filled in when Phase 4.7 implements
+// CellsLegalizer::tryMoveCellAcrossDies. Phase 4.1 plumbs the API only.
+struct CrossDieMoveParams
+{
+  int max_displacement_x = 0;  // 0 = unbounded
+  int max_displacement_y = 0;
+  bool rollback_on_overlap = true;
+  bool require_hpwl_decrease = true;
+};
+
 // Dynamic row-based legalizer (iPL-3D paper §IV.C.1, Fig. 5). The cluster
 // container is a partial-ordered map keyed by the leftmost cell's centre x,
 // which lets us insert cells in the middle of a row and merge with neighbours
@@ -46,6 +56,13 @@ class CellsLegalizer
   // Legalize every (or one) child die under the top hier block.
   // target_die: "" (all), "top", "bottom".
   void run(const std::string& target_die);
+
+  // Phase 4.7 (skeleton in Phase 4.1): try moving `cell` from its current
+  // die to the die identified by `new_die_id`. Returns true if applied
+  // and accepted, false otherwise. Stub returns false unconditionally.
+  bool tryMoveCellAcrossDies(odb::dbInst* cell,
+                             int new_die_id,
+                             const CrossDieMoveParams& params);
 
  private:
   struct Cluster

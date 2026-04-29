@@ -752,4 +752,19 @@ void CellsLegalizer::commitPlacement(Row& row)
   }
 }
 
+bool CellsLegalizer::tryMoveCellAcrossDies(odb::dbInst* /*cell*/,
+                                           int /*new_die_id*/,
+                                           const CrossDieMoveParams& /*params*/)
+{
+  // Phase 4.1 stub. Phase 4.7 implements via SwitchInstanceHelper +
+  // reStitchAffectedNets + local re-legalization.
+  if (logger_) {
+    logger_->info(utl::MDM,
+                  303,
+                  "CellsLegalizer::tryMoveCellAcrossDies: skeleton stub. "
+                  "Returning false. Implemented in Phase 4.7.");
+  }
+  return false;
+}
+
 }  // namespace mdm
