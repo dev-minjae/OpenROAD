@@ -89,6 +89,10 @@ class MultiDieManager
   void exportCoordinates(const std::string& file_name);
   void importCoordinates(const std::string& file_name);
 
+  // (top_max_util, bottom_max_util) percentage from ICCAD 2022 case header.
+  // {0, 0} if no ICCAD case has been parsed.
+  std::pair<int, int> getMaxUtils() const;
+
   // Phase 4 — iPL-3D paper §IV.A flattened init wrapper. Phase 4.1: stub.
   // Phase 4.4 implements: temporarily homes all cells to one die, runs
   // RePlAce with relaxed density, restores partition state.

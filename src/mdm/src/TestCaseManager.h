@@ -169,6 +169,11 @@ class TestCaseManager
   // Mapping from the Tcl-friendly test-case string to the enum.
   static TESTCASE lookupTestCase(const std::string& name);
 
+  // (top_max_util, bottom_max_util) in percent, populated by ICCAD 2022
+  // parser. {0, 0} if no ICCAD case parsed yet. Phase 4.2 reads these
+  // for the GlobalTierOptimizer knapsack constraint.
+  std::pair<int, int> getMaxUtils() const { return max_utils_; }
+
  private:
   void ICCADContest2022(const std::string& input_file_name,
                         MultiDieManager* mdm);

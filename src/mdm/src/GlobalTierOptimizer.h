@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <cstdint>
+#include <unordered_set>
 #include <vector>
 
 namespace odb {
@@ -22,28 +24,79 @@ struct TierOptParams
 {
   double rho = 500.0;      // terminal cost
   double alpha = 100.0;    // overflow cost
-  double beta = 0.5;       // overlap cost
+  double beta = 0.5;       // overlap cost (Phase 4.2 sets β·Δo = 0)
   double gamma = 0.0;      // 0 normally, 1e4 for high-density relief
   double B_factor = 1.1;   // knapsack: B = B_factor * u_t * A
   int max_outer_iter = 1;  // VNS outer iterations (Phase 4.3 uses >1)
+  // Skip nets with more than this many pins from ΔWL/ΔTerm evaluation
+  // and from the affected-cells re-priority list. Huge nets (clock,
+  // power, broadcast) inflate runtime quadratically without changing
+  // partition decisions in practice.
+  int max_net_fanout = 100;
+  // u_t and u_b in percent (0..100), populated by caller from ICCAD case
+  // header. Reference values; the *binding* knapsack caps are below in dbu².
+  int u_t_percent = 78;
+  int u_b_percent = 78;
+  // Knapsack capacities in dbu² area, mapped by the caller to from/to
+  // sides. If both are 0, run() falls back to u_*_percent × core_area
+  // assuming from = top, to = bottom.
+  int64_t cap_from_dbu = 0;
+  int64_t cap_to_dbu = 0;
 };
 
-// Algorithm 2 from paper §IV.B-2/3. Phase 4.1: skeleton only — run()
-// returns an empty vector and logs an info message. Phase 4.2 implements
-// the priority-queue + surrogate body.
+// Algorithm 2 from paper §IV.B-2/3. Phase 4.2: full body — priority-queue
+// based partition decision. Returns the cells that should flip from
+// `from_block` to `to_block`. Caller applies the decision (Phase 4.7 path).
 class GlobalTierOptimizer
 {
  public:
   GlobalTierOptimizer(odb::dbDatabase* db, utl::Logger* logger);
 
-  // Given a flattened placement (all cells in `from_block`), returns the
-  // cells whose partition_id should flip toward `to_block`. Caller is
-  // responsible for actually applying the partition decision.
   std::vector<odb::dbInst*> run(odb::dbBlock* from_block,
                                 odb::dbBlock* to_block,
                                 const TierOptParams& params);
 
  private:
+  // Algorithm 2 dynamic state: which cells have been accepted into the
+  // move set so far, plus pre-computed knapsack cap and row height for
+  // overflow normalization.
+  struct Context
+  {
+    odb::dbBlock* from_block = nullptr;
+    odb::dbBlock* to_block = nullptr;
+    std::unordered_set<odb::dbInst*> S;  // cells already accepted to move
+    TierOptParams params;
+    int64_t cap_t_dbu = 0;        // u_t * A on to-side
+    int64_t cap_from_dbu = 0;     // u of from-side * A on from-side
+    int64_t from_total_area = 0;  // fixed at run() entry
+    int64_t to_existing_area
+        = 0;                   // fixed at run() entry (pre-existing to cells)
+    int64_t s_total_area = 0;  // incremental: caller updates after S.insert
+    int row_height = 1;        // h_r for d(S) normalization
+  };
+
+  // ΔWL and Δ#Term contribution if `cell` flips from from_block to
+  // to_block (with S already moved). Pure function w.r.t. ctx.
+  struct MoveDelta
+  {
+    int64_t delta_wl = 0;
+    int delta_term = 0;
+  };
+  MoveDelta evaluateMove(odb::dbInst* cell, const Context& ctx) const;
+
+  // Eq 10a surrogate. Returns Δp = Δ(WL + ρ·#Term + α·d - γ·d_old).
+  // β·Δo dropped in Phase 4.2 (overlap is small under flat init's
+  // row-aligned cell layout; revisit if QoR demands it).
+  double surrogateDelta(odb::dbInst* cell, const Context& ctx) const;
+
+  // d(S) — single-bin overflow at to_block: max((used-cap)/h_r, 0).
+  double overflow(const Context& ctx) const;
+
+  // Algorithm 2 line 3: A_t(S_t ∪ S ∪ {cell}) ≤ B.
+  bool fitsKnapsack(odb::dbInst* cell, const Context& ctx) const;
+
+  static int64_t cellAreaDbu(odb::dbInst* cell);
+
   odb::dbDatabase* db_ = nullptr;
   utl::Logger* logger_ = nullptr;
 };

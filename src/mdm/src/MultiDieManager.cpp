@@ -703,6 +703,14 @@ void MultiDieManager::parseICCADOutput(const string& file_name,
   test_case_manager_->parseICCADOutput(file_name, which_die);
 }
 
+std::pair<int, int> MultiDieManager::getMaxUtils() const
+{
+  if (!test_case_manager_) {
+    return {0, 0};
+  }
+  return test_case_manager_->getMaxUtils();
+}
+
 ////////////////////////////////////////////////////////////////
 // Phase 4 — iPL-3D Global Tier Optimization plumbing (skeleton).
 // Bodies are filled in Phases 4.2/4.4/4.6.
@@ -723,36 +731,105 @@ void MultiDieManager::runGlobalTierOptimization(double rho,
                                                 double gamma,
                                                 bool apply)
 {
-  GlobalTierOptimizer optimizer(db_, logger_);
   TierOptParams params;
   params.rho = rho;
   params.alpha = alpha;
   params.beta = beta;
   params.gamma = gamma;
+  // u_t/u_b come from the ICCAD case header (TestCaseManager). Defaults
+  // hold if no ICCAD case parsed.
+  auto utils = getMaxUtils();
+  if (utils.first > 0) {
+    params.u_t_percent = utils.first;
+  }
+  if (utils.second > 0) {
+    params.u_b_percent = utils.second;
+  }
 
-  // Phase 4.1: from/to blocks resolved trivially (top child / bottom child).
-  // Phase 4.2 will validate that `set_3D_IC` has been called.
   odb::dbBlock* parent = db_->getChip()->getBlock();
   if (!parent || parent->getChildren().empty()) {
     logger_->warn(utl::MDM,
                   305,
                   "runGlobalTierOptimization: no child blocks; call "
-                  "`set_3D_IC` first. Skeleton no-op.");
+                  "`set_3D_IC` first.");
     return;
   }
-  auto child_iter = parent->getChildren().begin();
-  odb::dbBlock* from_block = *child_iter;
-  ++child_iter;
-  odb::dbBlock* to_block
-      = (child_iter != parent->getChildren().end()) ? *child_iter : nullptr;
 
+  // Identify the "from" block (the one currently holding cells) and the
+  // empty "to" block. In a flat-init state one child has all cells and
+  // the sibling is empty.
+  auto child_iter = parent->getChildren().begin();
+  odb::dbBlock* child_a = *child_iter;
+  ++child_iter;
+  odb::dbBlock* child_b
+      = (child_iter != parent->getChildren().end()) ? *child_iter : nullptr;
+  if (!child_b) {
+    logger_->warn(utl::MDM,
+                  308,
+                  "runGlobalTierOptimization: only one child block; need two.");
+    return;
+  }
+  // Pick from = block with more cells (the over-utilized side).
+  odb::dbBlock* from_block = child_a;
+  odb::dbBlock* to_block = child_b;
+  bool from_is_top = true;
+  if (child_a->getInsts().size() < child_b->getInsts().size()) {
+    from_block = child_b;
+    to_block = child_a;
+    from_is_top = false;
+  }
+  // Map ICCAD u_t/u_b to from/to caps. child_a (first) is conventionally
+  // the "top" die (die 0), child_b is "bottom" (die 1).
+  odb::Rect core_top = child_a->getCoreArea();
+  int64_t core_area = static_cast<int64_t>(core_top.dx())
+                      * static_cast<int64_t>(core_top.dy());
+  if (core_area > 0) {
+    if (from_is_top) {
+      params.cap_from_dbu = core_area * utils.first / 100;
+      params.cap_to_dbu = core_area * utils.second / 100;
+    } else {
+      params.cap_from_dbu = core_area * utils.second / 100;
+      params.cap_to_dbu = core_area * utils.first / 100;
+    }
+  }
+
+  GlobalTierOptimizer optimizer(db_, logger_);
   auto delta = optimizer.run(from_block, to_block, params);
-  logger_->info(utl::MDM,
-                306,
-                "runGlobalTierOptimization: returned {} cells, apply={} "
-                "(skeleton stub).",
-                delta.size(),
-                apply);
+
+  if (apply && !delta.empty()) {
+    int new_die_id = 0;
+    for (auto* child : parent->getChildren()) {
+      if (child == to_block) {
+        break;
+      }
+      ++new_die_id;
+    }
+    int migrated = 0;
+    for (auto* c : delta) {
+      auto* prop = odb::dbIntProperty::find(c, "partition_id");
+      if (prop) {
+        prop->setValue(new_die_id);
+      } else {
+        odb::dbIntProperty::create(c, "partition_id", new_die_id);
+      }
+      SwitchInstanceHelper::switchInstanceToAssignedDie(this, c);
+      ++migrated;
+    }
+    logger_->info(utl::MDM,
+                  306,
+                  "runGlobalTierOptimization: returned {} cells, applied "
+                  "{} migrations to die {}.",
+                  delta.size(),
+                  migrated,
+                  new_die_id);
+  } else {
+    logger_->info(utl::MDM,
+                  309,
+                  "runGlobalTierOptimization: returned {} cells, apply={} "
+                  "(no migration).",
+                  delta.size(),
+                  apply);
+  }
 }
 
 void MultiDieManager::run3DPlacement(int iterations, bool no_alternating)
