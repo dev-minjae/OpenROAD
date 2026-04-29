@@ -134,6 +134,42 @@ int64_t GlobalTierOptimizer::cellAreaDbu(odb::dbInst* cell)
          * static_cast<int64_t>(cell->getMaster()->getHeight());
 }
 
+int64_t GlobalTierOptimizer::cellAreaInFromTech(odb::dbInst* cell,
+                                                const Context& ctx) const
+{
+  const std::string name = cell->getMaster()->getName();
+  auto it = ctx.master_area_cache.find(name);
+  if (it != ctx.master_area_cache.end()) {
+    return it->second.first;
+  }
+  // First lookup: cell still lives under its from-tech master.
+  const int64_t from_area
+      = static_cast<int64_t>(cell->getMaster()->getWidth())
+        * static_cast<int64_t>(cell->getMaster()->getHeight());
+  int64_t to_area = from_area;
+  if (ctx.to_lib != nullptr) {
+    if (odb::dbMaster* m = ctx.to_lib->findMaster(name.c_str())) {
+      to_area = static_cast<int64_t>(m->getWidth())
+                * static_cast<int64_t>(m->getHeight());
+    }
+  }
+  ctx.master_area_cache[name] = {from_area, to_area};
+  return from_area;
+}
+
+int64_t GlobalTierOptimizer::cellAreaInToTech(odb::dbInst* cell,
+                                              const Context& ctx) const
+{
+  const std::string name = cell->getMaster()->getName();
+  auto it = ctx.master_area_cache.find(name);
+  if (it != ctx.master_area_cache.end()) {
+    return it->second.second;
+  }
+  // Trigger cache fill via the from-tech accessor, then read.
+  cellAreaInFromTech(cell, ctx);
+  return ctx.master_area_cache[name].second;
+}
+
 GlobalTierOptimizer::MoveDelta GlobalTierOptimizer::evaluateMove(
     odb::dbInst* cell,
     const Context& ctx) const
@@ -165,10 +201,12 @@ GlobalTierOptimizer::MoveDelta GlobalTierOptimizer::evaluateMove(
 double GlobalTierOptimizer::overflow(const Context& ctx) const
 {
   // Paper Eq 10b: d(S) = Σ_{region r} max((A_r − M_r)/h_r, 0).
-  // Single-bin per die. Uses cached from_total_area, to_existing_area,
-  // s_total_area for O(1) work.
-  const int64_t from_used = ctx.from_total_area - ctx.s_total_area;
-  const int64_t to_used = ctx.to_existing_area + ctx.s_total_area;
+  // Single-bin per die. Uses cached areas for O(1) work. Note that the
+  // S-cells contribute their from-tech area to the "from" overflow and
+  // their to-tech area to the "to" overflow (different libs may have
+  // different master sizes for the same cell).
+  const int64_t from_used = ctx.from_total_area - ctx.s_total_area_from;
+  const int64_t to_used = ctx.to_existing_area + ctx.s_total_area_to;
   const int64_t from_over = std::max<int64_t>(from_used - ctx.cap_from_dbu, 0);
   const int64_t to_over = std::max<int64_t>(to_used - ctx.cap_t_dbu, 0);
   return static_cast<double>(from_over + to_over)
@@ -180,12 +218,14 @@ double GlobalTierOptimizer::surrogateDelta(odb::dbInst* cell,
 {
   const MoveDelta md = evaluateMove(cell, ctx);
   const double d_before = overflow(ctx);
-  // d_after: shift cell's area from "from" bin to "to" bin.
-  const int64_t c_area = cellAreaDbu(cell);
+  // d_after: cell shifts from "from" bin (loses from-tech area) to "to"
+  // bin (gains to-tech area).
+  const int64_t c_from = cellAreaInFromTech(cell, ctx);
+  const int64_t c_to = cellAreaInToTech(cell, ctx);
   const int64_t from_used_after
-      = ctx.from_total_area - ctx.s_total_area - c_area;
+      = ctx.from_total_area - ctx.s_total_area_from - c_from;
   const int64_t to_used_after
-      = ctx.to_existing_area + ctx.s_total_area + c_area;
+      = ctx.to_existing_area + ctx.s_total_area_to + c_to;
   const int64_t from_over_after
       = std::max<int64_t>(from_used_after - ctx.cap_from_dbu, 0);
   const int64_t to_over_after
@@ -202,8 +242,8 @@ double GlobalTierOptimizer::surrogateDelta(odb::dbInst* cell,
 bool GlobalTierOptimizer::fitsKnapsack(odb::dbInst* cell,
                                        const Context& ctx) const
 {
-  const int64_t to_area
-      = ctx.to_existing_area + ctx.s_total_area + cellAreaDbu(cell);
+  const int64_t to_area = ctx.to_existing_area + ctx.s_total_area_to
+                          + cellAreaInToTech(cell, ctx);
   const int64_t B = static_cast<int64_t>(static_cast<double>(ctx.cap_t_dbu)
                                          * ctx.params.B_factor);
   return to_area <= B;
@@ -211,7 +251,8 @@ bool GlobalTierOptimizer::fitsKnapsack(odb::dbInst* cell,
 
 std::vector<odb::dbInst*> GlobalTierOptimizer::run(odb::dbBlock* from_block,
                                                    odb::dbBlock* to_block,
-                                                   const TierOptParams& params)
+                                                   const TierOptParams& params,
+                                                   odb::dbLib* to_lib)
 {
   std::vector<odb::dbInst*> result;
   if (!from_block || !to_block) {
@@ -224,6 +265,7 @@ std::vector<odb::dbInst*> GlobalTierOptimizer::run(odb::dbBlock* from_block,
   Context ctx;
   ctx.from_block = from_block;
   ctx.to_block = to_block;
+  ctx.to_lib = to_lib;
   ctx.params = params;
 
   // Knapsack caps. Prefer the caller-supplied dbu values; fall back to
@@ -245,13 +287,16 @@ std::vector<odb::dbInst*> GlobalTierOptimizer::run(odb::dbBlock* from_block,
   }
   ctx.from_total_area = 0;
   for (auto* c : from_block->getInsts()) {
-    ctx.from_total_area += cellAreaDbu(c);
+    ctx.from_total_area += cellAreaInFromTech(c, ctx);
   }
   ctx.to_existing_area = 0;
   for (auto* c : to_block->getInsts()) {
-    ctx.to_existing_area += cellAreaDbu(c);
+    // to_block cells already live under the to-tech master, so their
+    // cellAreaInFromTech (= current master area) is the to-tech area.
+    ctx.to_existing_area += cellAreaInFromTech(c, ctx);
   }
-  ctx.s_total_area = 0;
+  ctx.s_total_area_to = 0;
+  ctx.s_total_area_from = 0;
 
   auto rows = from_block->getRows();
   if (rows.begin() != rows.end()) {
@@ -278,7 +323,7 @@ std::vector<odb::dbInst*> GlobalTierOptimizer::run(odb::dbBlock* from_block,
   std::priority_queue<Entry> pq;
   for (auto* c : from_block->getInsts()) {
     const double dp = surrogateDelta(c, ctx);
-    const int64_t area = std::max<int64_t>(cellAreaDbu(c), 1);
+    const int64_t area = std::max<int64_t>(cellAreaInToTech(c, ctx), 1);
     const double b = -dp / static_cast<double>(area);
     pq.push({b, static_cast<uint64_t>(c->getId()), c});
   }
@@ -299,7 +344,8 @@ std::vector<odb::dbInst*> GlobalTierOptimizer::run(odb::dbBlock* from_block,
       continue;
     }
     ctx.S.insert(top.cell);
-    ctx.s_total_area += cellAreaDbu(top.cell);
+    ctx.s_total_area_from += cellAreaInFromTech(top.cell, ctx);
+    ctx.s_total_area_to += cellAreaInToTech(top.cell, ctx);
     result.push_back(top.cell);
     ++applied;
 

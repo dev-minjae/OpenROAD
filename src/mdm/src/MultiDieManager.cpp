@@ -193,13 +193,25 @@ void MultiDieManager::makeInterconnections(odb::dbBlock* lower_block,
   odb::dbBlock* top_hier = db_->getChip()->getBlock();
   int interconnect_count = 0;
   for (auto* lower_net : lower_block->getNets()) {
+    // Skip nets we've already paired via an earlier makeInterconnections
+    // call (Phase 4.2 -apply path may invoke this incrementally after
+    // cross-die migrations).
+    if (auto* p = odb::dbBoolProperty::find(lower_net, "intersected")) {
+      if (p->getValue()) {
+        continue;
+      }
+    }
     const string net_name = lower_net->getName();
     odb::dbNet* upper_net = upper_block->findNet(net_name.c_str());
     if (!upper_net) {
       continue;
     }
     odb::dbNet* top_hier_net = top_hier->findNet(net_name.c_str());
-    assert(top_hier_net);
+    if (!top_hier_net) {
+      // top_hier net was stripped after the first splitInstances pass
+      // (it became floating). Recreate so BTerms have something to land on.
+      top_hier_net = odb::dbNet::create(top_hier, net_name.c_str());
+    }
 
     const string interconnect_name = net_name + "Interconnection";
     odb::dbBTerm* lower_term
@@ -793,8 +805,32 @@ void MultiDieManager::runGlobalTierOptimization(double rho,
     }
   }
 
+  // Map to_block to its lib (skip TopHierLib). Iterating odb dbLibs in
+  // child-block order matches SwitchInstanceHelper's findTargetDieAndLib.
+  odb::dbLib* to_lib = nullptr;
+  {
+    int target_die_id = 0;
+    for (auto* child : parent->getChildren()) {
+      if (child == to_block) {
+        break;
+      }
+      ++target_die_id;
+    }
+    auto lib_iter = db_->getLibs().begin();
+    if (lib_iter != db_->getLibs().end()) {
+      ++lib_iter;  // skip TopHierLib
+      for (int i = 0; i < target_die_id && lib_iter != db_->getLibs().end();
+           ++i) {
+        ++lib_iter;
+      }
+      if (lib_iter != db_->getLibs().end()) {
+        to_lib = *lib_iter;
+      }
+    }
+  }
+
   GlobalTierOptimizer optimizer(db_, logger_);
-  auto delta = optimizer.run(from_block, to_block, params);
+  auto delta = optimizer.run(from_block, to_block, params, to_lib);
 
   if (apply && !delta.empty()) {
     int new_die_id = 0;
@@ -814,6 +850,28 @@ void MultiDieManager::runGlobalTierOptimization(double rho,
       }
       SwitchInstanceHelper::switchInstanceToAssignedDie(this, c);
       ++migrated;
+    }
+    // After migration, nets that span both dies are now genuinely cross-
+    // die. Re-pair them via BTerms so TerminalLegalizer + evaluator find
+    // the proper sibling structure.
+    auto first_iter = parent->getChildren().begin();
+    odb::dbBlock* first_child = *first_iter;
+    ++first_iter;
+    odb::dbBlock* second_child
+        = (first_iter != parent->getChildren().end()) ? *first_iter : nullptr;
+    if (second_child) {
+      makeInterconnections(first_child, second_child);
+      makeIOPinInterconnections();
+      // Strip floating nets on the parent (their iTerms/BTerms moved).
+      std::vector<odb::dbNet*> floating;
+      for (auto* net : parent->getNets()) {
+        if (net->getBTermCount() == 0 && net->getITermCount() == 0) {
+          floating.push_back(net);
+        }
+      }
+      for (auto* net : floating) {
+        odb::dbNet::destroy(net);
+      }
     }
     logger_->info(utl::MDM,
                   306,

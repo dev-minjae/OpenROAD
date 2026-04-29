@@ -4,6 +4,8 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -11,6 +13,8 @@ namespace odb {
 class dbBlock;
 class dbDatabase;
 class dbInst;
+class dbLib;
+class dbMaster;
 }  // namespace odb
 
 namespace utl {
@@ -26,7 +30,10 @@ struct TierOptParams
   double alpha = 100.0;    // overflow cost
   double beta = 0.5;       // overlap cost (Phase 4.2 sets β·Δo = 0)
   double gamma = 0.0;      // 0 normally, 1e4 for high-density relief
-  double B_factor = 1.1;   // knapsack: B = B_factor * u_t * A
+  double B_factor = 1.0;   // knapsack: B = B_factor * u_t * A
+                           // (paper Table III uses 1.1 assuming a follow-up
+                           // detailed tier opt tightens; we run alone, so
+                           // 1.0 keeps the partition strictly under cap)
   int max_outer_iter = 1;  // VNS outer iterations (Phase 4.3 uses >1)
   // Skip nets with more than this many pins from ΔWL/ΔTerm evaluation
   // and from the affected-cells re-priority list. Huge nets (clock,
@@ -54,7 +61,8 @@ class GlobalTierOptimizer
 
   std::vector<odb::dbInst*> run(odb::dbBlock* from_block,
                                 odb::dbBlock* to_block,
-                                const TierOptParams& params);
+                                const TierOptParams& params,
+                                odb::dbLib* to_lib = nullptr);
 
  private:
   // Algorithm 2 dynamic state: which cells have been accepted into the
@@ -64,16 +72,23 @@ class GlobalTierOptimizer
   {
     odb::dbBlock* from_block = nullptr;
     odb::dbBlock* to_block = nullptr;
+    odb::dbLib* to_lib = nullptr;        // for target-tech cell area lookup
     std::unordered_set<odb::dbInst*> S;  // cells already accepted to move
     TierOptParams params;
-    int64_t cap_t_dbu = 0;        // u_t * A on to-side
-    int64_t cap_from_dbu = 0;     // u of from-side * A on from-side
-    int64_t from_total_area = 0;  // fixed at run() entry
-    int64_t to_existing_area
-        = 0;                   // fixed at run() entry (pre-existing to cells)
-    int64_t s_total_area = 0;  // incremental: caller updates after S.insert
-    int row_height = 1;        // h_r for d(S) normalization
+    int64_t cap_t_dbu = 0;          // u_t * A on to-side
+    int64_t cap_from_dbu = 0;       // u of from-side * A on from-side
+    int64_t from_total_area = 0;    // fixed at run() entry (from-tech areas)
+    int64_t to_existing_area = 0;   // fixed at run() entry (to-tech areas)
+    int64_t s_total_area_to = 0;    // S cells under to-tech (incremental)
+    int64_t s_total_area_from = 0;  // S cells under from-tech (incremental)
+    int row_height = 1;             // h_r for d(S) normalization
+    // Cache: master name → (from_area, to_area) in dbu²
+    mutable std::unordered_map<std::string, std::pair<int64_t, int64_t>>
+        master_area_cache;
   };
+
+  int64_t cellAreaInFromTech(odb::dbInst* cell, const Context& ctx) const;
+  int64_t cellAreaInToTech(odb::dbInst* cell, const Context& ctx) const;
 
   // ΔWL and Δ#Term contribution if `cell` flips from from_block to
   // to_block (with S already moved). Pure function w.r.t. ctx.
