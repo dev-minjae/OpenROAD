@@ -83,11 +83,12 @@ void MultiDieManager::multiDieDetailPlacement(int max_displacement_x,
 
 void MultiDieManager::runSemiLegalizer(const std::string& target_die,
                                        bool use_abacus,
-                                       bool use_cells_dynamic_row)
+                                       bool use_cells_dynamic_row,
+                                       bool skip_pair_swap)
 {
   if (use_cells_dynamic_row) {
     CellsLegalizer legalizer(db_, logger_);
-    legalizer.run(target_die);
+    legalizer.run(target_die, skip_pair_swap);
     return;
   }
   SemiLegalizer legalizer(db_, logger_);

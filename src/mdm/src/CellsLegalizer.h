@@ -55,7 +55,11 @@ class CellsLegalizer
 
   // Legalize every (or one) child die under the top hier block.
   // target_die: "" (all), "top", "bottom".
-  void run(const std::string& target_die);
+  // skip_pair_swap: when true, skip the post-legalize pair-swap refinement
+  // (advisor 2026-05-01). pair-swap was tuned for almost-legal Xueyan-GP
+  // input; on Phase 4.5 free-form Nesterov output the swap pass amplifies
+  // displacement noise. Set true after Planar Correcting.
+  void run(const std::string& target_die, bool skip_pair_swap = false);
 
   // Phase 4.7 (skeleton in Phase 4.1): try moving `cell` from its current
   // die to the die identified by `new_die_id`. Returns true if applied
@@ -156,6 +160,7 @@ class CellsLegalizer
   odb::dbDatabase* db_ = nullptr;
   utl::Logger* logger_ = nullptr;
   odb::dbBlock* target_block_ = nullptr;
+  bool skip_pair_swap_ = false;
   std::unordered_map<odb::dbNet*, odb::Rect> sibling_bbox_cache_;
 };
 

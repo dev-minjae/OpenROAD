@@ -61,7 +61,8 @@ class MultiDieManager
   // -no_cells_dynamic_row.
   void runSemiLegalizer(const std::string& target_die = "",
                         bool use_abacus = true,
-                        bool use_cells_dynamic_row = true);
+                        bool use_cells_dynamic_row = true,
+                        bool skip_pair_swap = false);
 
   // 3D IC configuration. Calling set3DIC triggers splitInstances: read the
   // partition file (or fall back to a half/half split), create child blocks

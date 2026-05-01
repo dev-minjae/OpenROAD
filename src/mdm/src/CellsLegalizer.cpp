@@ -26,8 +26,9 @@ int CellsLegalizer::instWidth(odb::dbInst* inst)
   return static_cast<int>(inst->getMaster()->getWidth());
 }
 
-void CellsLegalizer::run(const std::string& target_die)
+void CellsLegalizer::run(const std::string& target_die, bool skip_pair_swap)
 {
+  skip_pair_swap_ = skip_pair_swap;
   odb::dbBlock* top = db_->getChip()->getBlock();
   auto children = top->getChildren();
   if (children.begin() == children.end()) {
@@ -113,11 +114,17 @@ void CellsLegalizer::legalizeBlock(odb::dbBlock* block)
       const bool can_down = (next_down >= 0);
       const int up_y = y_min + row_height * next_up;
       const int down_y = y_min + row_height * next_down;
-      // Direction comparison preserved verbatim from SemiLegalizer; the
-      // up_y/orig_x mix-up matches the contest-winning reference.
+      // Direction comparison: pick the direction (up or down) whose row
+      // y is closer to inst's original y. The original SemiLegalizer
+      // (and contest-winning reference) had `orig_x` here — a typo that
+      // is invisible for nearly-row-aligned inputs (Xueyan-GP) because
+      // cost_best's early-exit recovers the right row, but matters for
+      // free-form Nesterov output where cells are ~½·row_height off
+      // rows and the direction-first decision affects which candidates
+      // get pruned. (advisor 2026-05-01)
       const bool search_up
           = !can_down
-            || (can_up && std::abs(up_y - orig_x) < std::abs(down_y - orig_x));
+            || (can_up && std::abs(up_y - orig_y) < std::abs(down_y - orig_y));
       const int row_idx = search_up ? next_up : next_down;
       const int row_y = search_up ? up_y : down_y;
 
@@ -167,7 +174,9 @@ void CellsLegalizer::legalizeBlock(odb::dbBlock* block)
     commitPlacement(row);
   }
 
-  pairSwap(block);
+  if (!skip_pair_swap_) {
+    pairSwap(block);
+  }
 
   logger_->info(utl::MDM,
                 50,

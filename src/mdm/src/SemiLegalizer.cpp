@@ -133,9 +133,14 @@ void SemiLegalizer::runAbacus(odb::dbBlock* block)
       const bool can_down = (next_down >= 0);
       const int up_y = y_min + row_height * next_up;
       const int down_y = y_min + row_height * next_down;
+      // Pick the closer row direction. `orig_x` here was a long-standing
+      // typo from the contest-winning reference; correct field is
+      // `orig_y` (advisor 2026-05-01). Effect was hidden when cells were
+      // already nearly row-aligned (Xueyan GP), surfaces on Phase 4.5
+      // free-form Nesterov output.
       const bool search_up
           = !can_down
-            || (can_up && std::abs(up_y - orig_x) < std::abs(down_y - orig_x));
+            || (can_up && std::abs(up_y - orig_y) < std::abs(down_y - orig_y));
       const int row_idx = search_up ? next_up : next_down;
       const int row_y = search_up ? up_y : down_y;
 
