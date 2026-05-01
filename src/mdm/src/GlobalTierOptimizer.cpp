@@ -184,8 +184,41 @@ GlobalTierOptimizer::MoveDelta GlobalTierOptimizer::evaluateMove(
     if (!seen.insert(net).second) {
       continue;  // multi-pin same-net iterms — count once
     }
-    if (static_cast<int>(net->getITerms().size()) > ctx.params.max_net_fanout) {
-      continue;  // skip clock-tree-like huge nets
+    const int fanout = static_cast<int>(net->getITerms().size());
+    if (fanout > ctx.params.max_net_fanout) {
+      // Coarse path for clock/broadcast nets: skip ΔWL geometry but
+      // still account for Δ#Term. Walking pins for membership only is
+      // O(fanout) without per-pin getAvgXY (the heavy call). Without
+      // this, the surrogate would systematically under-count ε flips
+      // on exactly the nets where each crossing is most expensive
+      // (advisor R-13 finding).
+      bool before_to = false;
+      bool before_from = false;
+      bool after_to = false;
+      bool after_from = false;
+      for (auto* peer_it : net->getITerms()) {
+        odb::dbInst* inst = peer_it->getInst();
+        if (!inst) {
+          continue;
+        }
+        const bool peer_on_to = ctx.S.count(inst) > 0;
+        if (inst == cell) {
+          // After move, the cell sits on the to-side; before, it
+          // was on the from-side.
+          before_from = true;
+          after_to = true;
+        } else if (peer_on_to) {
+          before_to = true;
+          after_to = true;
+        } else {
+          before_from = true;
+          after_from = true;
+        }
+      }
+      const bool before_crossing = before_to && before_from;
+      const bool after_crossing = after_to && after_from;
+      md.delta_term += (after_crossing ? 1 : 0) - (before_crossing ? 1 : 0);
+      continue;
     }
     PinPartition pp_before
         = classifyPins(net, cell, ctx.S, /*count_moving_cell_as_to=*/false);
