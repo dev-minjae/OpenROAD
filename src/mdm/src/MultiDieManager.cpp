@@ -23,6 +23,7 @@
 #include "TerminalLegalizer.h"
 #include "TestCaseManager.h"
 #include "dpl/Opendp.h"
+#include "gpl/Replace.h"
 #include "odb/db.h"
 #include "utl/Logger.h"
 
@@ -887,6 +888,99 @@ void MultiDieManager::runGlobalTierOptimization(double rho,
                   "(no migration).",
                   delta.size(),
                   apply);
+  }
+}
+
+namespace {
+
+// RAII-scoped placement-status toggle: marks every inst in `block` as
+// FIRM on construction, restores its prior status on destruction.
+// Honours odb's FIRM behaviour: gpl::PlacerBase::isFixed() now returns
+// true for these cells, so doIncrementalPlace skips them.
+class ScopedFirmFreeze
+{
+ public:
+  explicit ScopedFirmFreeze(odb::dbBlock* block) : block_(block)
+  {
+    if (!block_) {
+      return;
+    }
+    for (odb::dbInst* inst : block_->getInsts()) {
+      saved_.emplace_back(inst, inst->getPlacementStatus());
+      inst->setPlacementStatus(odb::dbPlacementStatus::FIRM);
+    }
+  }
+
+  ~ScopedFirmFreeze()
+  {
+    for (auto& [inst, status] : saved_) {
+      inst->setPlacementStatus(status);
+    }
+  }
+
+  ScopedFirmFreeze(const ScopedFirmFreeze&) = delete;
+  ScopedFirmFreeze& operator=(const ScopedFirmFreeze&) = delete;
+
+ private:
+  odb::dbBlock* block_;
+  std::vector<std::pair<odb::dbInst*, odb::dbPlacementStatus>> saved_;
+};
+
+}  // namespace
+
+void MultiDieManager::runPlanarCorrecting(int iterations)
+{
+  if (!replace_) {
+    logger_->error(
+        utl::MDM, 313, "runPlanarCorrecting: gpl::Replace pointer is null.");
+    return;
+  }
+  odb::dbBlock* parent = db_->getChip()->getBlock();
+  if (!parent || parent->getChildren().empty()) {
+    logger_->warn(utl::MDM,
+                  310,
+                  "runPlanarCorrecting: no child blocks; call set_3D_IC + "
+                  "run_global_tier_optimization -apply first.");
+    return;
+  }
+  std::vector<odb::dbBlock*> children;
+  for (auto* c : parent->getChildren()) {
+    children.push_back(c);
+  }
+  if (children.size() < 2) {
+    logger_->warn(utl::MDM,
+                  311,
+                  "runPlanarCorrecting: need ≥2 child blocks; got {}.",
+                  children.size());
+    return;
+  }
+  for (int k = 0; k < iterations; ++k) {
+    for (size_t active_idx = 0; active_idx < children.size(); ++active_idx) {
+      // Freeze every die except the active one.
+      std::vector<std::unique_ptr<ScopedFirmFreeze>> freezes;
+      for (size_t i = 0; i < children.size(); ++i) {
+        if (i == active_idx) {
+          continue;
+        }
+        freezes.push_back(std::make_unique<ScopedFirmFreeze>(children[i]));
+      }
+      logger_->info(utl::MDM,
+                    312,
+                    "runPlanarCorrecting: iter {}, active die {} (others "
+                    "FIRM-frozen).",
+                    k,
+                    active_idx);
+      gpl::PlaceOptions opts;
+      opts.skipIoMode = true;
+      opts.density = 1.5;
+      opts.intersectedNetWeight = 1.5;
+      // Use doNesterovPlace (skips initial-place CG iterations that
+      // crash on the post-migration mixed-block layout). Cells already
+      // have valid placements from the migration, so initial place is
+      // not needed.
+      replace_->doNesterovPlace(/*threads=*/1, opts);
+      // RAII destructors restore statuses here.
+    }
   }
 }
 

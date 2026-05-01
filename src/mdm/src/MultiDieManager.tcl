@@ -220,6 +220,20 @@ proc run_global_tier_optimization { args } {
   mdm::run_global_tier_optimization $rho $alpha $beta $gamma $apply
 }
 
+# Phase 4 — iPL-3D paper §IV.D Planar Solution Correcting (SP-2).
+sta::define_cmd_args "run_planar_correcting" {[-iterations iter]}
+
+proc run_planar_correcting { args } {
+  sta::parse_key_args "run_planar_correcting" args \
+    keys {-iterations} flags {}
+
+  set iterations 1
+  if { [info exists keys(-iterations)] } {
+    set iterations $keys(-iterations)
+  }
+  mdm::run_planar_correcting $iterations
+}
+
 # Phase 4 — iPL-3D paper Algorithm 1 bilevel coordinator. Phase 4.1: stub.
 sta::define_cmd_args "run_3d_placement" {\
     [-iterations iter] [-no_alternating]}

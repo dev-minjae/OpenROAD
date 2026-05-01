@@ -106,6 +106,13 @@ class MultiDieManager
                                  double gamma = 0.0,
                                  bool apply = false);
 
+  // Phase 4 — iPL-3D paper §IV.D Planar Solution Correcting (SP-2).
+  // For each of `iterations` rounds, freezes each child die in turn
+  // (sets cells to FIRM placement status, runs `replace_->doIncrementalPlace`
+  // so only the un-frozen die moves, then restores statuses). Re-uses the
+  // RAII-scoped FIRM toggle planned in Phase 4.0 research §4.
+  void runPlanarCorrecting(int iterations = 1);
+
   // Phase 4 — iPL-3D paper Algorithm 1 bilevel coordinator. Phase 4.1: stub.
   // Phase 4.6 implements full SP-1 ↔ SP-2 alternation.
   void run3DPlacement(int iterations = 4, bool no_alternating = false);
