@@ -123,6 +123,12 @@ run_planar_correcting(int iterations = 1)
 }
 
 void
+snap_cells_to_rows()
+{
+  getMultiDieManager()->snapCellsToRows();
+}
+
+void
 run_3d_placement(int iterations = 4, bool no_alternating = false)
 {
   getMultiDieManager()->run3DPlacement(iterations, no_alternating);

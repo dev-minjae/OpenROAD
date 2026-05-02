@@ -985,6 +985,55 @@ void MultiDieManager::runPlanarCorrecting(int iterations)
   }
 }
 
+void MultiDieManager::snapCellsToRows()
+{
+  odb::dbBlock* parent = db_->getChip()->getBlock();
+  if (!parent) {
+    return;
+  }
+  int total_snapped = 0;
+  int total_max_dy = 0;
+  for (auto* child : parent->getChildren()) {
+    auto rows = child->getRows();
+    if (rows.begin() == rows.end()) {
+      continue;
+    }
+    // Collect row y_mins in sorted order; assume uniform row pitch.
+    const int row_height = (*rows.begin())->getBBox().dy();
+    const int y_min = (*rows.begin())->getBBox().yMin();
+    int num_rows = 0;
+    for (auto* r : rows) {
+      (void) r;
+      ++num_rows;
+    }
+    int max_dy = 0;
+    for (auto* inst : child->getInsts()) {
+      const odb::Point loc = inst->getLocation();
+      const int orig_y = loc.y();
+      // Nearest row index, clamped to [0, num_rows-1].
+      int row_idx = (orig_y - y_min + row_height / 2) / row_height;
+      if (row_idx < 0) {
+        row_idx = 0;
+      }
+      if (row_idx >= num_rows) {
+        row_idx = num_rows - 1;
+      }
+      const int snapped_y = y_min + row_idx * row_height;
+      if (snapped_y != orig_y) {
+        ++total_snapped;
+        max_dy = std::max(max_dy, std::abs(snapped_y - orig_y));
+      }
+      inst->setLocation(loc.x(), snapped_y);
+    }
+    total_max_dy = std::max(total_max_dy, max_dy);
+  }
+  logger_->info(utl::MDM,
+                314,
+                "snapCellsToRows: snapped {} cells, max |Δy|={} dbu.",
+                total_snapped,
+                total_max_dy);
+}
+
 void MultiDieManager::run3DPlacement(int iterations, bool no_alternating)
 {
   BilevelParams params;

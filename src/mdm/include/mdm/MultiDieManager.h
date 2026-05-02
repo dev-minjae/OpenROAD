@@ -114,6 +114,14 @@ class MultiDieManager
   // RAII-scoped FIRM toggle planned in Phase 4.0 research §4.
   void runPlanarCorrecting(int iterations = 1);
 
+  // Phase 4 helper — snap each child-die cell's y to its nearest row's
+  // y_min. doNesterovPlace produces free-form (row-unaligned) output;
+  // CellsLegalizer's row-pack assumes near-row-aligned input. This helper
+  // bridges the gap without touching x. ICCAD 2022's site grid is non-
+  // uniform in cell width so standard dpl::Opendp loops; CellsLegalizer
+  // is the right downstream legalizer once cells are y-aligned.
+  void snapCellsToRows();
+
   // Phase 4 — iPL-3D paper Algorithm 1 bilevel coordinator. Phase 4.1: stub.
   // Phase 4.6 implements full SP-1 ↔ SP-2 alternation.
   void run3DPlacement(int iterations = 4, bool no_alternating = false);

@@ -240,6 +240,15 @@ proc run_planar_correcting { args } {
   mdm::run_planar_correcting $iterations
 }
 
+# Helper: snap each child-die cell's y to nearest row. Closes the
+# free-form-output → row-aligned-input gap between Planar Correcting
+# and CellsLegalizer.
+sta::define_cmd_args "snap_cells_to_rows" {}
+
+proc snap_cells_to_rows { args } {
+  mdm::snap_cells_to_rows
+}
+
 # Phase 4 — iPL-3D paper Algorithm 1 bilevel coordinator. Phase 4.1: stub.
 sta::define_cmd_args "run_3d_placement" {\
     [-iterations iter] [-no_alternating]}
