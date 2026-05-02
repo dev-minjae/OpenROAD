@@ -53,13 +53,22 @@ class CellsLegalizer
  public:
   CellsLegalizer(odb::dbDatabase* db, utl::Logger* logger);
 
+  // Input shape selector. The default abacus path was tuned for nearly-
+  // row-aligned Xueyan-GP input; the tetris path handles free-form
+  // Nesterov output (Phase 4.5).
+  enum class Mode
+  {
+    ABACUS,  // legacy: cluster-based row-pack
+    TETRIS,  // new: displacement-min row + slot search (advisor 2026-05-01)
+  };
+
   // Legalize every (or one) child die under the top hier block.
   // target_die: "" (all), "top", "bottom".
-  // skip_pair_swap: when true, skip the post-legalize pair-swap refinement
-  // (advisor 2026-05-01). pair-swap was tuned for almost-legal Xueyan-GP
-  // input; on Phase 4.5 free-form Nesterov output the swap pass amplifies
-  // displacement noise. Set true after Planar Correcting.
-  void run(const std::string& target_die, bool skip_pair_swap = false);
+  // skip_pair_swap: when true, skip the post-legalize pair-swap refinement.
+  // mode: ABACUS (default, Xueyan-GP input) or TETRIS (free-form input).
+  void run(const std::string& target_die,
+           bool skip_pair_swap = false,
+           Mode mode = Mode::ABACUS);
 
   // Phase 4.7 (skeleton in Phase 4.1): try moving `cell` from its current
   // die to the die identified by `new_die_id`. Returns true if applied
@@ -82,6 +91,13 @@ class CellsLegalizer
       = std::map<int, Cluster>;  // key = leftmost cell's centre x at insert
 
   void legalizeBlock(odb::dbBlock* block);
+  // Tetris row-pack for free-form input. For each cell sorted by left x,
+  // tries the candidate rows in order of |row_y − orig_y| and accepts the
+  // first row that has free width left. Within a row, cells are appended
+  // left-to-right by orig_x order (each cell snaps to max(orig_x, prev
+  // cell's right x)). This is a straight NTUplace3-style Tetris:
+  // no clusters, no q/e/w, just per-row width tracking.
+  void legalizeBlockTetris(odb::dbBlock* block);
 
   // Insert `inst` into the partial-ordered row map as a singleton cluster
   // keyed by its centre-x, then cascadeMerge to absorb any overlap with

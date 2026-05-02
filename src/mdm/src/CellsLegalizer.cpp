@@ -26,9 +26,23 @@ int CellsLegalizer::instWidth(odb::dbInst* inst)
   return static_cast<int>(inst->getMaster()->getWidth());
 }
 
-void CellsLegalizer::run(const std::string& target_die, bool skip_pair_swap)
+void CellsLegalizer::run(const std::string& target_die,
+                         bool skip_pair_swap,
+                         Mode mode)
 {
   skip_pair_swap_ = skip_pair_swap;
+  auto place = [&](odb::dbBlock* block) {
+    if (mode == Mode::TETRIS) {
+      legalizeBlockTetris(block);
+      target_block_ = block;
+      if (!skip_pair_swap_) {
+        buildSiblingCache(block);
+        pairSwap(block);
+      }
+    } else {
+      legalizeBlock(block);
+    }
+  };
   odb::dbBlock* top = db_->getChip()->getBlock();
   auto children = top->getChildren();
   if (children.begin() == children.end()) {
@@ -37,7 +51,7 @@ void CellsLegalizer::run(const std::string& target_die, bool skip_pair_swap)
     return;
   }
   if (target_die == "top") {
-    legalizeBlock(*children.begin());
+    place(*children.begin());
     return;
   }
   if (target_die == "bottom") {
@@ -50,11 +64,11 @@ void CellsLegalizer::run(const std::string& target_die, bool skip_pair_swap)
                     "one child die exists.");
       return;
     }
-    legalizeBlock(*it);
+    place(*it);
     return;
   }
   for (auto* child : children) {
-    legalizeBlock(child);
+    place(child);
   }
 }
 
@@ -181,6 +195,130 @@ void CellsLegalizer::legalizeBlock(odb::dbBlock* block)
   logger_->info(utl::MDM,
                 50,
                 "CellsLegalizer: legalized {} ({} insts, {} rows).",
+                block->getName(),
+                block->getInsts().size(),
+                num_rows);
+}
+
+// Tetris row-pack for free-form (Nesterov) input. Closes the bump that
+// CellsLegalizer's abacus path leaves on Phase 4.5 output. Per-row
+// state is just (cells_in_row_sorted_by_x, cumulative_width); per-cell
+// row search ranks rows by |row_y − orig_y|.
+void CellsLegalizer::legalizeBlockTetris(odb::dbBlock* block)
+{
+  auto rows = block->getRows();
+  if (rows.begin() == rows.end()) {
+    logger_->warn(utl::MDM,
+                  55,
+                  "CellsLegalizer (tetris): block {} has no rows; skipping.",
+                  block->getName());
+    return;
+  }
+  const int num_rows = static_cast<int>(rows.size());
+  const int row_height = (*rows.begin())->getBBox().dy();
+  const int y_min = (*rows.begin())->getBBox().yMin();
+  const int row_xmin = (*rows.begin())->getBBox().xMin();
+  const int row_xmax = (*rows.begin())->getBBox().xMax();
+
+  // Per-row state: append-only list of (cell, x_left). New cells get
+  // x_left = max(cell.orig_x, prev_right). Cumulative width tracked
+  // separately for fast capacity check.
+  struct RowSlot
+  {
+    odb::dbInst* inst;
+    int x_left;
+  };
+  std::vector<std::vector<RowSlot>> row_slots(num_rows);
+  std::vector<int64_t> row_used_w(num_rows, 0);
+  const int64_t row_cap_w = static_cast<int64_t>(row_xmax - row_xmin);
+
+  // Sort cells by original (x, then id) so we lay them down left→right
+  // in the order they want to be placed in.
+  std::vector<odb::dbInst*> cells(block->getInsts().begin(),
+                                  block->getInsts().end());
+  std::sort(cells.begin(), cells.end(), [](odb::dbInst* a, odb::dbInst* b) {
+    const int ax = a->getLocation().x();
+    const int bx = b->getLocation().x();
+    if (ax != bx) {
+      return ax < bx;
+    }
+    return a->getId() < b->getId();
+  });
+
+  for (odb::dbInst* inst : cells) {
+    const int orig_x = inst->getLocation().x();
+    const int orig_y = inst->getLocation().y();
+    const int inst_w = instWidth(inst);
+    // Rank rows by |row_y − orig_y|, take the first that fits.
+    // Walk outward from the nearest row.
+    int center = (orig_y - y_min) / row_height;
+    if (center < 0) {
+      center = 0;
+    }
+    if (center >= num_rows) {
+      center = num_rows - 1;
+    }
+    int chosen_row = -1;
+    for (int delta = 0; delta < num_rows; ++delta) {
+      for (int sign : {0, 1, -1}) {
+        if (sign == 0 && delta != 0) {
+          continue;
+        }
+        if (sign != 0 && delta == 0) {
+          continue;
+        }
+        const int r = center + sign * delta;
+        if (r < 0 || r >= num_rows) {
+          continue;
+        }
+        if (row_used_w[r] + inst_w > row_cap_w) {
+          continue;
+        }
+        chosen_row = r;
+        break;
+      }
+      if (chosen_row >= 0) {
+        break;
+      }
+    }
+    if (chosen_row < 0) {
+      // No row has space — drop into the row with most slack and let
+      // pairSwap clean it up.
+      int best = 0;
+      int64_t best_used = row_used_w[0];
+      for (int r = 1; r < num_rows; ++r) {
+        if (row_used_w[r] < best_used) {
+          best_used = row_used_w[r];
+          best = r;
+        }
+      }
+      chosen_row = best;
+    }
+    // Within the chosen row, snap to max(orig_x, prev_right). If that
+    // pushes past row_xmax, slide back to row_xmax − inst_w.
+    int x_left = orig_x;
+    if (!row_slots[chosen_row].empty()) {
+      const auto& last = row_slots[chosen_row].back();
+      const int prev_right = last.x_left + instWidth(last.inst);
+      if (x_left < prev_right) {
+        x_left = prev_right;
+      }
+    }
+    if (x_left < row_xmin) {
+      x_left = row_xmin;
+    }
+    if (x_left + inst_w > row_xmax) {
+      x_left = row_xmax - inst_w;
+    }
+    const int row_y = y_min + row_height * chosen_row;
+    inst->setLocation(x_left, row_y);
+    row_slots[chosen_row].push_back({inst, x_left});
+    row_used_w[chosen_row] += inst_w;
+  }
+
+  logger_->info(utl::MDM,
+                56,
+                "CellsLegalizer (tetris): legalized {} ({} insts, {} rows).",
                 block->getName(),
                 block->getInsts().size(),
                 num_rows);

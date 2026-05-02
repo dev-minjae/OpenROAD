@@ -84,11 +84,14 @@ void MultiDieManager::multiDieDetailPlacement(int max_displacement_x,
 void MultiDieManager::runSemiLegalizer(const std::string& target_die,
                                        bool use_abacus,
                                        bool use_cells_dynamic_row,
-                                       bool skip_pair_swap)
+                                       bool skip_pair_swap,
+                                       bool use_tetris)
 {
   if (use_cells_dynamic_row) {
     CellsLegalizer legalizer(db_, logger_);
-    legalizer.run(target_die, skip_pair_swap);
+    const auto mode = use_tetris ? CellsLegalizer::Mode::TETRIS
+                                 : CellsLegalizer::Mode::ABACUS;
+    legalizer.run(target_die, skip_pair_swap, mode);
     return;
   }
   SemiLegalizer legalizer(db_, logger_);
