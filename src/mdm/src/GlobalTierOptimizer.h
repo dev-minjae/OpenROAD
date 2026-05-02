@@ -26,7 +26,12 @@ namespace mdm {
 // iPL-3D paper §IV.B parameters (Table III defaults).
 struct TierOptParams
 {
-  double rho = 500.0;      // terminal cost
+  // Paper Table III default for ρ is 500 in their normalized HPWL unit
+  // (likely μm). With OpenROAD's dbu (case scale=2000 → 1μm=2000 dbu)
+  // the dbu-equivalent default is ~1M. case2 measurement (2026-05-02)
+  // confirms: ρ=500 yields 1540 terminals (3.3× paper); ρ=1M yields
+  // 711 (1.5× paper) and improves e2e HPWL by 5%. Caller can override.
+  double rho = 1000000.0;  // terminal cost (in dbu units)
   double alpha = 100.0;    // overflow cost
   double beta = 0.5;       // overlap cost (Phase 4.2 sets β·Δo = 0)
   double gamma = 0.0;      // 0 normally, 1e4 for high-density relief
