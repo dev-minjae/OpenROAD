@@ -189,50 +189,85 @@ proc import_inst_coordinates { args } {
 
 # Phase 4 — iPL-3D paper §IV.B Algorithm 2 single-shot.
 sta::define_cmd_args "run_global_tier_optimization" {\
-    [-rho rho] [-alpha alpha] [-beta beta] [-gamma gamma] [-apply]}
+    [-rho rho] [-alpha alpha] [-beta beta] [-gamma gamma] \
+    [-b_factor b] [-max_net_fanout f] \
+    [-u_t_percent u_t] [-u_b_percent u_b] \
+    [-apply]}
 
 proc run_global_tier_optimization { args } {
   sta::parse_key_args "run_global_tier_optimization" args \
-    keys {-rho -alpha -beta -gamma} flags {-apply}
+    keys {-rho -alpha -beta -gamma -b_factor -max_net_fanout \
+          -u_t_percent -u_b_percent} \
+    flags {-apply}
 
-  # Paper Table III defaults — surrogate now runs in normalized μm
+  # Paper Table III defaults — surrogate runs in normalized μm
   # (auto-converted from dbu via getICCADScale), so paper's constants
-  # apply directly.
+  # apply directly. b_factor = 1.0 (vs paper 1.1) keeps strict cap.
+  # u_t/u_b = 0 means fall back to ICCAD case header values.
   set rho 500.0
   set alpha 100.0
   set beta 0.5
   set gamma 0.0
+  set b_factor 1.0
+  set max_net_fanout 100
+  set u_t_percent 0
+  set u_b_percent 0
   set apply 0
-  if { [info exists keys(-rho)] } {
-    set rho $keys(-rho)
+  if { [info exists keys(-rho)] } { set rho $keys(-rho) }
+  if { [info exists keys(-alpha)] } { set alpha $keys(-alpha) }
+  if { [info exists keys(-beta)] } { set beta $keys(-beta) }
+  if { [info exists keys(-gamma)] } { set gamma $keys(-gamma) }
+  if { [info exists keys(-b_factor)] } { set b_factor $keys(-b_factor) }
+  if { [info exists keys(-max_net_fanout)] } {
+    set max_net_fanout $keys(-max_net_fanout)
   }
-  if { [info exists keys(-alpha)] } {
-    set alpha $keys(-alpha)
+  if { [info exists keys(-u_t_percent)] } {
+    set u_t_percent $keys(-u_t_percent)
   }
-  if { [info exists keys(-beta)] } {
-    set beta $keys(-beta)
+  if { [info exists keys(-u_b_percent)] } {
+    set u_b_percent $keys(-u_b_percent)
   }
-  if { [info exists keys(-gamma)] } {
-    set gamma $keys(-gamma)
-  }
-  if { [info exists flags(-apply)] } {
-    set apply 1
-  }
-  mdm::run_global_tier_optimization $rho $alpha $beta $gamma $apply
+  if { [info exists flags(-apply)] } { set apply 1 }
+  mdm::run_global_tier_optimization $rho $alpha $beta $gamma \
+                                    $b_factor $max_net_fanout \
+                                    $u_t_percent $u_b_percent $apply
 }
 
 # Phase 4 — iPL-3D paper §IV.D Planar Solution Correcting (SP-2).
-sta::define_cmd_args "run_planar_correcting" {[-iterations iter]}
+sta::define_cmd_args "run_planar_correcting" {\
+    [-iterations iter] \
+    [-density density] \
+    [-intersected_net_weight w] \
+    [-nesterov_max_iter n] \
+    [-no_skip_io_mode]}
 
 proc run_planar_correcting { args } {
   sta::parse_key_args "run_planar_correcting" args \
-    keys {-iterations} flags {}
+    keys {-iterations -density -intersected_net_weight -nesterov_max_iter} \
+    flags {-no_skip_io_mode}
 
   set iterations 1
+  set density 1.5
+  set intersected_net_weight 1.5
+  set nesterov_max_iter 5000
+  set skip_io_mode 1
   if { [info exists keys(-iterations)] } {
     set iterations $keys(-iterations)
   }
-  mdm::run_planar_correcting $iterations
+  if { [info exists keys(-density)] } {
+    set density $keys(-density)
+  }
+  if { [info exists keys(-intersected_net_weight)] } {
+    set intersected_net_weight $keys(-intersected_net_weight)
+  }
+  if { [info exists keys(-nesterov_max_iter)] } {
+    set nesterov_max_iter $keys(-nesterov_max_iter)
+  }
+  if { [info exists flags(-no_skip_io_mode)] } {
+    set skip_io_mode 0
+  }
+  mdm::run_planar_correcting $iterations $density $intersected_net_weight \
+                             $nesterov_max_iter $skip_io_mode
 }
 
 # Helper: snap each child-die cell's y to nearest row. Closes the

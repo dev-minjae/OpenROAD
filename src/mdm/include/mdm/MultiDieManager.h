@@ -101,10 +101,16 @@ class MultiDieManager
   int getICCADScale() const;
 
   // Phase 4 — iPL-3D paper §IV.B Algorithm 2 single-shot.
+  // u_t_percent / u_b_percent = 0 means fall back to the ICCAD case
+  // header values (TestCaseManager::getMaxUtils). Non-zero overrides.
   void runGlobalTierOptimization(double rho = 500.0,
                                  double alpha = 100.0,
                                  double beta = 0.5,
                                  double gamma = 0.0,
+                                 double b_factor = 1.0,
+                                 int max_net_fanout = 100,
+                                 int u_t_percent = 0,
+                                 int u_b_percent = 0,
                                  bool apply = false);
 
   // Phase 4 — iPL-3D paper §IV.D Planar Solution Correcting (SP-2).
@@ -112,7 +118,11 @@ class MultiDieManager
   // (sets cells to FIRM placement status, runs `replace_->doIncrementalPlace`
   // so only the un-frozen die moves, then restores statuses). Re-uses the
   // RAII-scoped FIRM toggle planned in Phase 4.0 research §4.
-  void runPlanarCorrecting(int iterations = 1);
+  void runPlanarCorrecting(int iterations = 1,
+                           double density = 1.5,
+                           double intersected_net_weight = 1.5,
+                           int nesterov_max_iter = 5000,
+                           bool skip_io_mode = true);
 
   // Phase 4 helper — snap each child-die cell's y to its nearest row's
   // y_min. doNesterovPlace produces free-form (row-unaligned) output;

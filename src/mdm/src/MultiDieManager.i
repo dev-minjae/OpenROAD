@@ -108,16 +108,29 @@ run_global_tier_optimization(double rho = 500.0,
                              double alpha = 100.0,
                              double beta = 0.5,
                              double gamma = 0.0,
+                             double b_factor = 1.0,
+                             int max_net_fanout = 100,
+                             int u_t_percent = 0,
+                             int u_b_percent = 0,
                              bool apply = false)
 {
   getMultiDieManager()->runGlobalTierOptimization(
-      rho, alpha, beta, gamma, apply);
+      rho, alpha, beta, gamma, b_factor, max_net_fanout,
+      u_t_percent, u_b_percent, apply);
 }
 
 void
-run_planar_correcting(int iterations = 1)
+run_planar_correcting(int iterations = 1,
+                      double density = 1.5,
+                      double intersected_net_weight = 1.5,
+                      int nesterov_max_iter = 5000,
+                      bool skip_io_mode = true)
 {
-  getMultiDieManager()->runPlanarCorrecting(iterations);
+  getMultiDieManager()->runPlanarCorrecting(iterations,
+                                            density,
+                                            intersected_net_weight,
+                                            nesterov_max_iter,
+                                            skip_io_mode);
 }
 
 void

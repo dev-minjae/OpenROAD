@@ -867,6 +867,10 @@ void MultiDieManager::runGlobalTierOptimization(double rho,
                                                 double alpha,
                                                 double beta,
                                                 double gamma,
+                                                double b_factor,
+                                                int max_net_fanout,
+                                                int u_t_percent,
+                                                int u_b_percent,
                                                 bool apply)
 {
   TierOptParams params;
@@ -874,16 +878,22 @@ void MultiDieManager::runGlobalTierOptimization(double rho,
   params.alpha = alpha;
   params.beta = beta;
   params.gamma = gamma;
+  params.B_factor = b_factor;
+  params.max_net_fanout = max_net_fanout;
   // dbu/μm conversion so the surrogate runs in paper's normalized μm
   // units; paper Table III's ρ=500, α=100, β=0.5 then apply directly.
   params.dbu_per_um = getICCADScale();
-  // u_t/u_b come from the ICCAD case header (TestCaseManager). Defaults
-  // hold if no ICCAD case parsed.
+  // u_t/u_b: caller-provided > 0 wins; else fall back to ICCAD case
+  // header (TestCaseManager); else struct default.
   auto utils = getMaxUtils();
-  if (utils.first > 0) {
+  if (u_t_percent > 0) {
+    params.u_t_percent = u_t_percent;
+  } else if (utils.first > 0) {
     params.u_t_percent = utils.first;
   }
-  if (utils.second > 0) {
+  if (u_b_percent > 0) {
+    params.u_b_percent = u_b_percent;
+  } else if (utils.second > 0) {
     params.u_b_percent = utils.second;
   }
 
@@ -964,7 +974,11 @@ class ScopedFirmFreeze
 
 }  // namespace
 
-void MultiDieManager::runPlanarCorrecting(int iterations)
+void MultiDieManager::runPlanarCorrecting(int iterations,
+                                          double density,
+                                          double intersected_net_weight,
+                                          int nesterov_max_iter,
+                                          bool skip_io_mode)
 {
   if (!replace_) {
     logger_->error(
@@ -997,9 +1011,10 @@ void MultiDieManager::runPlanarCorrecting(int iterations)
                     k,
                     active_idx);
       gpl::PlaceOptions opts;
-      opts.skipIoMode = true;
-      opts.density = 1.5;
-      opts.intersectedNetWeight = 1.5;
+      opts.skipIoMode = skip_io_mode;
+      opts.density = density;
+      opts.intersectedNetWeight = intersected_net_weight;
+      opts.nesterovPlaceMaxIter = nesterov_max_iter;
       // Use doNesterovPlace (skips initial-place CG iterations that
       // crash on the post-migration mixed-block layout). Cells already
       // have valid placements from the migration, so initial place is
