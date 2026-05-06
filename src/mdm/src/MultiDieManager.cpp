@@ -45,6 +45,29 @@ MultiDieManager::MultiDieManager(odb::dbDatabase* db,
   test_case_manager_->setMDM(this);
 }
 
+std::vector<odb::dbBlock*> MultiDieManager::getChildBlocks() const
+{
+  std::vector<odb::dbBlock*> result;
+  if (!db_ || !db_->getChip() || !db_->getChip()->getBlock()) {
+    return result;
+  }
+  for (auto* child : db_->getChip()->getBlock()->getChildren()) {
+    result.push_back(child);
+  }
+  return result;
+}
+
+int MultiDieManager::dieIndexOf(odb::dbBlock* block) const
+{
+  const auto children = getChildBlocks();
+  for (size_t i = 0; i < children.size(); ++i) {
+    if (children[i] == block) {
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+
 ////////////////////////////////////////////////////////////////
 // Multi-die detailed placement — runs dpl::Opendp on every child
 // die in the top hier block using the block-aware detailedPlacement
@@ -763,29 +786,16 @@ void MultiDieManager::runGlobalTierOptimization(double rho,
     params.u_b_percent = utils.second;
   }
 
-  odb::dbBlock* parent = db_->getChip()->getBlock();
-  if (!parent || parent->getChildren().empty()) {
-    logger_->warn(utl::MDM,
-                  305,
-                  "runGlobalTierOptimization: no child blocks; call "
-                  "`set_3D_IC` first.");
-    return;
-  }
-
-  // Identify the "from" block (the one currently holding cells) and the
-  // empty "to" block. In a flat-init state one child has all cells and
-  // the sibling is empty.
-  auto child_iter = parent->getChildren().begin();
-  odb::dbBlock* child_a = *child_iter;
-  ++child_iter;
-  odb::dbBlock* child_b
-      = (child_iter != parent->getChildren().end()) ? *child_iter : nullptr;
-  if (!child_b) {
+  const auto children = getChildBlocks();
+  if (children.size() < 2) {
     logger_->warn(utl::MDM,
                   308,
-                  "runGlobalTierOptimization: only one child block; need two.");
+                  "runGlobalTierOptimization: need >=2 child blocks; got {}.",
+                  children.size());
     return;
   }
+  odb::dbBlock* child_a = children[0];
+  odb::dbBlock* child_b = children[1];
   // Pick from = block with more cells (the over-utilized side).
   odb::dbBlock* from_block = child_a;
   odb::dbBlock* to_block = child_b;
@@ -795,8 +805,8 @@ void MultiDieManager::runGlobalTierOptimization(double rho,
     to_block = child_a;
     from_is_top = false;
   }
-  // Map ICCAD u_t/u_b to from/to caps. child_a (first) is conventionally
-  // the "top" die (die 0), child_b is "bottom" (die 1).
+  // Map ICCAD u_t/u_b to from/to caps. children[0] (first) is conventionally
+  // the "top" die (die 0), children[1] is "bottom" (die 1).
   odb::Rect core_top = child_a->getCoreArea();
   int64_t core_area = static_cast<int64_t>(core_top.dx())
                       * static_cast<int64_t>(core_top.dy());
@@ -814,13 +824,7 @@ void MultiDieManager::runGlobalTierOptimization(double rho,
   // child-block order matches SwitchInstanceHelper's findTargetDieAndLib.
   odb::dbLib* to_lib = nullptr;
   {
-    int target_die_id = 0;
-    for (auto* child : parent->getChildren()) {
-      if (child == to_block) {
-        break;
-      }
-      ++target_die_id;
-    }
+    const int target_die_id = dieIndexOf(to_block);
     auto lib_iter = db_->getLibs().begin();
     if (lib_iter != db_->getLibs().end()) {
       ++lib_iter;  // skip TopHierLib
@@ -838,13 +842,7 @@ void MultiDieManager::runGlobalTierOptimization(double rho,
   auto delta = optimizer.run(from_block, to_block, params, to_lib);
 
   if (apply && !delta.empty()) {
-    int new_die_id = 0;
-    for (auto* child : parent->getChildren()) {
-      if (child == to_block) {
-        break;
-      }
-      ++new_die_id;
-    }
+    const int new_die_id = dieIndexOf(to_block);
     int migrated = 0;
     for (auto* c : delta) {
       auto* prop = odb::dbIntProperty::find(c, "partition_id");
@@ -859,24 +857,18 @@ void MultiDieManager::runGlobalTierOptimization(double rho,
     // After migration, nets that span both dies are now genuinely cross-
     // die. Re-pair them via BTerms so TerminalLegalizer + evaluator find
     // the proper sibling structure.
-    auto first_iter = parent->getChildren().begin();
-    odb::dbBlock* first_child = *first_iter;
-    ++first_iter;
-    odb::dbBlock* second_child
-        = (first_iter != parent->getChildren().end()) ? *first_iter : nullptr;
-    if (second_child) {
-      makeInterconnections(first_child, second_child);
-      makeIOPinInterconnections();
-      // Strip floating nets on the parent (their iTerms/BTerms moved).
-      std::vector<odb::dbNet*> floating;
-      for (auto* net : parent->getNets()) {
-        if (net->getBTermCount() == 0 && net->getITermCount() == 0) {
-          floating.push_back(net);
-        }
+    makeInterconnections(children[0], children[1]);
+    makeIOPinInterconnections();
+    // Strip floating nets on the parent (their iTerms/BTerms moved).
+    odb::dbBlock* parent = db_->getChip()->getBlock();
+    std::vector<odb::dbNet*> floating;
+    for (auto* net : parent->getNets()) {
+      if (net->getBTermCount() == 0 && net->getITermCount() == 0) {
+        floating.push_back(net);
       }
-      for (auto* net : floating) {
-        odb::dbNet::destroy(net);
-      }
+    }
+    for (auto* net : floating) {
+      odb::dbNet::destroy(net);
     }
     logger_->info(utl::MDM,
                   306,
@@ -939,22 +931,12 @@ void MultiDieManager::runPlanarCorrecting(int iterations)
         utl::MDM, 313, "runPlanarCorrecting: gpl::Replace pointer is null.");
     return;
   }
-  odb::dbBlock* parent = db_->getChip()->getBlock();
-  if (!parent || parent->getChildren().empty()) {
-    logger_->warn(utl::MDM,
-                  310,
-                  "runPlanarCorrecting: no child blocks; call set_3D_IC + "
-                  "run_global_tier_optimization -apply first.");
-    return;
-  }
-  std::vector<odb::dbBlock*> children;
-  for (auto* c : parent->getChildren()) {
-    children.push_back(c);
-  }
+  const auto children = getChildBlocks();
   if (children.size() < 2) {
     logger_->warn(utl::MDM,
-                  311,
-                  "runPlanarCorrecting: need ≥2 child blocks; got {}.",
+                  310,
+                  "runPlanarCorrecting: need >=2 child blocks (got {}); call "
+                  "set_3D_IC + run_global_tier_optimization -apply first.",
                   children.size());
     return;
   }
@@ -990,13 +972,9 @@ void MultiDieManager::runPlanarCorrecting(int iterations)
 
 void MultiDieManager::snapCellsToRows()
 {
-  odb::dbBlock* parent = db_->getChip()->getBlock();
-  if (!parent) {
-    return;
-  }
   int total_snapped = 0;
   int total_max_dy = 0;
-  for (auto* child : parent->getChildren()) {
+  for (auto* child : getChildBlocks()) {
     auto rows = child->getRows();
     if (rows.begin() == rows.end()) {
       continue;

@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace odb {
 class dbDatabase;
@@ -121,6 +122,14 @@ class MultiDieManager
   void snapCellsToRows();
 
  private:
+  // Convenience: child blocks of the top-hier block in iteration order.
+  // Convention: index 0 = top die, index 1 = bottom die.
+  std::vector<odb::dbBlock*> getChildBlocks() const;
+
+  // Returns the index in getChildBlocks() of the given child, or -1 if
+  // not a child of the top-hier block.
+  int dieIndexOf(odb::dbBlock* block) const;
+
   void splitInstances();
   void makeSubBlocks();
   void switchInstancesToAssignedDie();
