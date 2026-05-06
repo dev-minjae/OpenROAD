@@ -29,10 +29,10 @@ struct TierOptParams
   // Paper Table III defaults — all in normalized HPWL unit (μm). Surrogate
   // converts ΔWL and Δd from raw dbu to μm using `dbu_per_um` so these
   // constants apply directly. Caller may override.
-  double rho = 500.0;     // terminal cost (paper Table III)
-  double alpha = 100.0;   // overflow cost
-  double beta = 0.5;      // overlap cost (Phase 4.2 sets β·Δo = 0)
-  double gamma = 0.0;     // 0 normally, 1e4 for high-density relief
+  double rho = 500.0;    // terminal cost (paper Table III)
+  double alpha = 100.0;  // overflow cost
+  double beta = 0.5;     // overlap cost (Phase 4.2 sets β·Δo = 0)
+  double gamma = 0.0;    // 0 normally, 1e4 for high-density relief
   // dbu/μm conversion. Set by caller from ICCAD scale (typically 2000).
   // 1 means the surrogate runs in raw dbu (legacy behavior).
   int dbu_per_um = 1;
@@ -112,6 +112,10 @@ class GlobalTierOptimizer
 
   // d(S) — single-bin overflow at to_block: max((used-cap)/h_r, 0).
   double overflow(const Context& ctx) const;
+
+  // d(S ∪ {cell}): same formula as overflow() but applies cell's
+  // from-tech and to-tech areas as deltas. Returned in μm.
+  double overflowAfterAddingCell(odb::dbInst* cell, const Context& ctx) const;
 
   // Algorithm 2 line 3: A_t(S_t ∪ S ∪ {cell}) ≤ B.
   bool fitsKnapsack(odb::dbInst* cell, const Context& ctx) const;

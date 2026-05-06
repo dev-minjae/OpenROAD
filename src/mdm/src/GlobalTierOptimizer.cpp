@@ -71,6 +71,49 @@ int64_t bboxHpwl(const std::vector<int>& xs, const std::vector<int>& ys)
          + static_cast<int64_t>(*y_minmax.second - *y_minmax.first);
 }
 
+// Coarse evaluation for a huge-fanout net: skip ΔWL geometry but still
+// account for Δ#Term. Walks pins for membership only (O(fanout) without
+// per-pin getAvgXY). Without this, the surrogate would systematically
+// under-count ε flips on exactly the nets where each crossing is most
+// expensive (advisor R-13 finding).
+struct CoarseDelta
+{
+  int delta_term = 0;
+};
+
+CoarseDelta evaluateNetCoarse(odb::dbNet* net,
+                              odb::dbInst* moving_cell,
+                              const std::unordered_set<odb::dbInst*>& S)
+{
+  CoarseDelta cd;
+  bool before_to = false;
+  bool before_from = false;
+  bool after_to = false;
+  bool after_from = false;
+  for (auto* peer_it : net->getITerms()) {
+    odb::dbInst* inst = peer_it->getInst();
+    if (!inst) {
+      continue;
+    }
+    const bool peer_on_to = S.count(inst) > 0;
+    if (inst == moving_cell) {
+      // After move, the cell sits on the to-side; before, from-side.
+      before_from = true;
+      after_to = true;
+    } else if (peer_on_to) {
+      before_to = true;
+      after_to = true;
+    } else {
+      before_from = true;
+      after_from = true;
+    }
+  }
+  const bool before_crossing = before_to && before_from;
+  const bool after_crossing = after_to && after_from;
+  cd.delta_term = (after_crossing ? 1 : 0) - (before_crossing ? 1 : 0);
+  return cd;
+}
+
 // HPWL of the net under a given pin partition. If both sides have pins,
 // inserts a TOR-center terminal and returns the merged 3D HPWL (matches
 // the formula used by MultiDieManager::get3DHPWL and CellsLegalizer's
@@ -186,38 +229,8 @@ GlobalTierOptimizer::MoveDelta GlobalTierOptimizer::evaluateMove(
     }
     const int fanout = static_cast<int>(net->getITerms().size());
     if (fanout > ctx.params.max_net_fanout) {
-      // Coarse path for clock/broadcast nets: skip ΔWL geometry but
-      // still account for Δ#Term. Walking pins for membership only is
-      // O(fanout) without per-pin getAvgXY (the heavy call). Without
-      // this, the surrogate would systematically under-count ε flips
-      // on exactly the nets where each crossing is most expensive
-      // (advisor R-13 finding).
-      bool before_to = false;
-      bool before_from = false;
-      bool after_to = false;
-      bool after_from = false;
-      for (auto* peer_it : net->getITerms()) {
-        odb::dbInst* inst = peer_it->getInst();
-        if (!inst) {
-          continue;
-        }
-        const bool peer_on_to = ctx.S.count(inst) > 0;
-        if (inst == cell) {
-          // After move, the cell sits on the to-side; before, it
-          // was on the from-side.
-          before_from = true;
-          after_to = true;
-        } else if (peer_on_to) {
-          before_to = true;
-          after_to = true;
-        } else {
-          before_from = true;
-          after_from = true;
-        }
-      }
-      const bool before_crossing = before_to && before_from;
-      const bool after_crossing = after_to && after_from;
-      md.delta_term += (after_crossing ? 1 : 0) - (before_crossing ? 1 : 0);
+      const CoarseDelta cd = evaluateNetCoarse(net, cell, ctx.S);
+      md.delta_term += cd.delta_term;
       continue;
     }
     PinPartition pp_before
@@ -250,6 +263,24 @@ double GlobalTierOptimizer::overflow(const Context& ctx) const
   return d_dbu / static_cast<double>(std::max(1, ctx.params.dbu_per_um));
 }
 
+double GlobalTierOptimizer::overflowAfterAddingCell(odb::dbInst* cell,
+                                                    const Context& ctx) const
+{
+  const int64_t c_from = cellAreaInFromTech(cell, ctx);
+  const int64_t c_to = cellAreaInToTech(cell, ctx);
+  const int64_t from_used_after
+      = ctx.from_total_area - ctx.s_total_area_from - c_from;
+  const int64_t to_used_after
+      = ctx.to_existing_area + ctx.s_total_area_to + c_to;
+  const int64_t from_over_after
+      = std::max<int64_t>(from_used_after - ctx.cap_from_dbu, 0);
+  const int64_t to_over_after
+      = std::max<int64_t>(to_used_after - ctx.cap_t_dbu, 0);
+  const double d_dbu = static_cast<double>(from_over_after + to_over_after)
+                       / static_cast<double>(ctx.row_height);
+  return d_dbu / static_cast<double>(std::max(1, ctx.params.dbu_per_um));
+}
+
 double GlobalTierOptimizer::surrogateDelta(odb::dbInst* cell,
                                            const Context& ctx) const
 {
@@ -261,24 +292,10 @@ double GlobalTierOptimizer::surrogateDelta(odb::dbInst* cell,
       = static_cast<double>(std::max(1, ctx.params.dbu_per_um));
   const double delta_wl_um = static_cast<double>(md.delta_wl) / dbu_per_um;
 
-  const double d_before = overflow(ctx);  // already in μm
-  const int64_t c_from = cellAreaInFromTech(cell, ctx);
-  const int64_t c_to = cellAreaInToTech(cell, ctx);
-  const int64_t from_used_after
-      = ctx.from_total_area - ctx.s_total_area_from - c_from;
-  const int64_t to_used_after
-      = ctx.to_existing_area + ctx.s_total_area_to + c_to;
-  const int64_t from_over_after
-      = std::max<int64_t>(from_used_after - ctx.cap_from_dbu, 0);
-  const int64_t to_over_after
-      = std::max<int64_t>(to_used_after - ctx.cap_t_dbu, 0);
-  const double d_after_dbu
-      = static_cast<double>(from_over_after + to_over_after)
-        / static_cast<double>(ctx.row_height);
-  const double d_after = d_after_dbu / dbu_per_um;
+  const double d_before = overflow(ctx);
+  const double d_after = overflowAfterAddingCell(cell, ctx);
 
-  return delta_wl_um
-         + ctx.params.rho * static_cast<double>(md.delta_term)
+  return delta_wl_um + ctx.params.rho * static_cast<double>(md.delta_term)
          + ctx.params.alpha * (d_after - d_before)
          - ctx.params.gamma * d_before;
 }
