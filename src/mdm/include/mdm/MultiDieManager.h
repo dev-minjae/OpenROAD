@@ -11,6 +11,7 @@ namespace odb {
 class dbDatabase;
 class dbBlock;
 class dbInst;
+class dbLib;
 class dbNet;
 }  // namespace odb
 
@@ -129,6 +130,38 @@ class MultiDieManager
   // Returns the index in getChildBlocks() of the given child, or -1 if
   // not a child of the top-hier block.
   int dieIndexOf(odb::dbBlock* block) const;
+
+  // Pick (from, to) blocks for Algorithm 2: from = block with more cells,
+  // to = the other. from_is_top_die is true iff from == children[0]
+  // (per "first child = top" convention).
+  struct FromToBlocks
+  {
+    odb::dbBlock* from;
+    odb::dbBlock* to;
+    bool from_is_top_die;
+  };
+  FromToBlocks findFromToBlocks(
+      const std::vector<odb::dbBlock*>& children) const;
+
+  // Compute knapsack capacities (cap_from_dbu, cap_to_dbu) given the ICCAD
+  // u_t/u_b utilization caps. Uses children[0]'s core (top die) for area,
+  // matching the legacy implementation.
+  void mapKnapsackCaps(const std::vector<odb::dbBlock*>& children,
+                       const FromToBlocks& ft,
+                       int u_t_percent,
+                       int u_b_percent,
+                       int64_t& out_cap_from_dbu,
+                       int64_t& out_cap_to_dbu) const;
+
+  // Locate the dbLib for a target child block, skipping TopHierLib.
+  // Returns nullptr if the lib cannot be found.
+  odb::dbLib* findLibForBlock(odb::dbBlock* block) const;
+
+  // Apply Algorithm 2's migration decision: flip partition_id, run
+  // SwitchInstanceHelper, re-pair cross-die nets, re-pair IO pins,
+  // and strip floating top-hier nets. Returns the number of cells migrated.
+  int applyMigration(const std::vector<odb::dbInst*>& cells,
+                     odb::dbBlock* to_block);
 
   void splitInstances();
   void makeSubBlocks();

@@ -68,6 +68,107 @@ int MultiDieManager::dieIndexOf(odb::dbBlock* block) const
   return -1;
 }
 
+MultiDieManager::FromToBlocks MultiDieManager::findFromToBlocks(
+    const std::vector<odb::dbBlock*>& children) const
+{
+  FromToBlocks result{children[0], children[1], true};
+  if (children[0]->getInsts().size() < children[1]->getInsts().size()) {
+    result.from = children[1];
+    result.to = children[0];
+    result.from_is_top_die = false;
+  }
+  return result;
+}
+
+void MultiDieManager::mapKnapsackCaps(
+    const std::vector<odb::dbBlock*>& children,
+    const FromToBlocks& ft,
+    int u_t_percent,
+    int u_b_percent,
+    int64_t& out_cap_from_dbu,
+    int64_t& out_cap_to_dbu) const
+{
+  out_cap_from_dbu = 0;
+  out_cap_to_dbu = 0;
+  // Convention: children[0] = top, children[1] = bottom. ICCAD header
+  // gives u_t for top and u_b for bottom. Use children[0]'s core
+  // (top die) for area to preserve the legacy behavior — different-tech
+  // designs may have differing-dim cores between dies.
+  odb::Rect core = children[0]->getCoreArea();
+  int64_t core_area
+      = static_cast<int64_t>(core.dx()) * static_cast<int64_t>(core.dy());
+  if (core_area == 0) {
+    return;
+  }
+  if (ft.from_is_top_die) {
+    out_cap_from_dbu = core_area * u_t_percent / 100;
+    out_cap_to_dbu = core_area * u_b_percent / 100;
+  } else {
+    out_cap_from_dbu = core_area * u_b_percent / 100;
+    out_cap_to_dbu = core_area * u_t_percent / 100;
+  }
+}
+
+odb::dbLib* MultiDieManager::findLibForBlock(odb::dbBlock* block) const
+{
+  if (!db_ || !block) {
+    return nullptr;
+  }
+  const int target_die_id = dieIndexOf(block);
+  if (target_die_id < 0) {
+    return nullptr;
+  }
+  auto lib_iter = db_->getLibs().begin();
+  if (lib_iter == db_->getLibs().end()) {
+    return nullptr;
+  }
+  ++lib_iter;  // skip TopHierLib
+  for (int i = 0; i < target_die_id && lib_iter != db_->getLibs().end(); ++i) {
+    ++lib_iter;
+  }
+  return (lib_iter != db_->getLibs().end()) ? *lib_iter : nullptr;
+}
+
+int MultiDieManager::applyMigration(const std::vector<odb::dbInst*>& cells,
+                                    odb::dbBlock* to_block)
+{
+  if (cells.empty() || !to_block) {
+    return 0;
+  }
+  const int new_die_id = dieIndexOf(to_block);
+  if (new_die_id < 0) {
+    return 0;
+  }
+  int migrated = 0;
+  for (auto* c : cells) {
+    auto* prop = odb::dbIntProperty::find(c, "partition_id");
+    if (prop) {
+      prop->setValue(new_die_id);
+    } else {
+      odb::dbIntProperty::create(c, "partition_id", new_die_id);
+    }
+    SwitchInstanceHelper::switchInstanceToAssignedDie(this, c);
+    ++migrated;
+  }
+  // Re-pair cross-die nets that became cross-die through this migration.
+  const auto children = getChildBlocks();
+  if (children.size() >= 2) {
+    makeInterconnections(children[0], children[1]);
+    makeIOPinInterconnections();
+    odb::dbBlock* parent = db_->getChip()->getBlock();
+    std::vector<odb::dbNet*> floating;
+    for (auto* net : parent->getNets()) {
+      if (net->getBTermCount() == 0 && net->getITermCount() == 0) {
+        floating.push_back(net);
+      }
+    }
+    for (auto* net : floating) {
+      odb::dbNet::destroy(net);
+    }
+  }
+  return migrated;
+}
+
 ////////////////////////////////////////////////////////////////
 // Multi-die detailed placement — runs dpl::Opendp on every child
 // die in the top hier block using the block-aware detailedPlacement
@@ -794,89 +895,28 @@ void MultiDieManager::runGlobalTierOptimization(double rho,
                   children.size());
     return;
   }
-  odb::dbBlock* child_a = children[0];
-  odb::dbBlock* child_b = children[1];
-  // Pick from = block with more cells (the over-utilized side).
-  odb::dbBlock* from_block = child_a;
-  odb::dbBlock* to_block = child_b;
-  bool from_is_top = true;
-  if (child_a->getInsts().size() < child_b->getInsts().size()) {
-    from_block = child_b;
-    to_block = child_a;
-    from_is_top = false;
-  }
-  // Map ICCAD u_t/u_b to from/to caps. children[0] (first) is conventionally
-  // the "top" die (die 0), children[1] is "bottom" (die 1).
-  odb::Rect core_top = child_a->getCoreArea();
-  int64_t core_area = static_cast<int64_t>(core_top.dx())
-                      * static_cast<int64_t>(core_top.dy());
-  if (core_area > 0) {
-    if (from_is_top) {
-      params.cap_from_dbu = core_area * utils.first / 100;
-      params.cap_to_dbu = core_area * utils.second / 100;
-    } else {
-      params.cap_from_dbu = core_area * utils.second / 100;
-      params.cap_to_dbu = core_area * utils.first / 100;
-    }
-  }
 
-  // Map to_block to its lib (skip TopHierLib). Iterating odb dbLibs in
-  // child-block order matches SwitchInstanceHelper's findTargetDieAndLib.
-  odb::dbLib* to_lib = nullptr;
-  {
-    const int target_die_id = dieIndexOf(to_block);
-    auto lib_iter = db_->getLibs().begin();
-    if (lib_iter != db_->getLibs().end()) {
-      ++lib_iter;  // skip TopHierLib
-      for (int i = 0; i < target_die_id && lib_iter != db_->getLibs().end();
-           ++i) {
-        ++lib_iter;
-      }
-      if (lib_iter != db_->getLibs().end()) {
-        to_lib = *lib_iter;
-      }
-    }
-  }
+  const FromToBlocks ft = findFromToBlocks(children);
+  mapKnapsackCaps(children,
+                  ft,
+                  params.u_t_percent,
+                  params.u_b_percent,
+                  params.cap_from_dbu,
+                  params.cap_to_dbu);
+  odb::dbLib* to_lib = findLibForBlock(ft.to);
 
   GlobalTierOptimizer optimizer(db_, logger_);
-  auto delta = optimizer.run(from_block, to_block, params, to_lib);
+  auto delta = optimizer.run(ft.from, ft.to, params, to_lib);
 
   if (apply && !delta.empty()) {
-    const int new_die_id = dieIndexOf(to_block);
-    int migrated = 0;
-    for (auto* c : delta) {
-      auto* prop = odb::dbIntProperty::find(c, "partition_id");
-      if (prop) {
-        prop->setValue(new_die_id);
-      } else {
-        odb::dbIntProperty::create(c, "partition_id", new_die_id);
-      }
-      SwitchInstanceHelper::switchInstanceToAssignedDie(this, c);
-      ++migrated;
-    }
-    // After migration, nets that span both dies are now genuinely cross-
-    // die. Re-pair them via BTerms so TerminalLegalizer + evaluator find
-    // the proper sibling structure.
-    makeInterconnections(children[0], children[1]);
-    makeIOPinInterconnections();
-    // Strip floating nets on the parent (their iTerms/BTerms moved).
-    odb::dbBlock* parent = db_->getChip()->getBlock();
-    std::vector<odb::dbNet*> floating;
-    for (auto* net : parent->getNets()) {
-      if (net->getBTermCount() == 0 && net->getITermCount() == 0) {
-        floating.push_back(net);
-      }
-    }
-    for (auto* net : floating) {
-      odb::dbNet::destroy(net);
-    }
+    const int migrated = applyMigration(delta, ft.to);
     logger_->info(utl::MDM,
                   306,
                   "runGlobalTierOptimization: returned {} cells, applied "
                   "{} migrations to die {}.",
                   delta.size(),
                   migrated,
-                  new_die_id);
+                  dieIndexOf(ft.to));
   } else {
     logger_->info(utl::MDM,
                   309,
