@@ -15,9 +15,7 @@
 #include <string>
 #include <vector>
 
-#include "BilevelCoordinator.h"
 #include "CellsLegalizer.h"
-#include "FastTerminalLegalizer.h"
 #include "GlobalTierOptimizer.h"
 #include "SemiLegalizer.h"
 #include "TerminalLegalizer.h"
@@ -741,15 +739,6 @@ int MultiDieManager::getICCADScale() const
 // Bodies are filled in Phases 4.2/4.4/4.6.
 ////////////////////////////////////////////////////////////////
 
-void MultiDieManager::runFlattenedPlacement(double density)
-{
-  logger_->info(utl::MDM,
-                304,
-                "runFlattenedPlacement: stub. density={}. Implemented in "
-                "Phase 4.4.",
-                density);
-}
-
 void MultiDieManager::runGlobalTierOptimization(double rho,
                                                 double alpha,
                                                 double beta,
@@ -1046,16 +1035,6 @@ void MultiDieManager::snapCellsToRows()
                 "snapCellsToRows: snapped {} cells, max |Δy|={} dbu.",
                 total_snapped,
                 total_max_dy);
-}
-
-void MultiDieManager::run3DPlacement(int iterations, bool no_alternating)
-{
-  BilevelParams params;
-  params.M = iterations;
-  params.no_alternating = no_alternating;
-
-  BilevelCoordinator coordinator(this, replace_, logger_);
-  coordinator.run(params);
 }
 
 }  // namespace mdm

@@ -29,10 +29,7 @@ namespace mdm {
 
 class TestCaseManager;
 class GlobalTierOptimizer;
-class FastTerminalLegalizer;
-class BilevelCoordinator;
 struct TierOptParams;
-struct BilevelParams;
 
 class MultiDieManager
 {
@@ -101,13 +98,7 @@ class MultiDieManager
   // (ρ=500, α=100, β=0.5) apply directly.
   int getICCADScale() const;
 
-  // Phase 4 — iPL-3D paper §IV.A flattened init wrapper. Phase 4.1: stub.
-  // Phase 4.4 implements: temporarily homes all cells to one die, runs
-  // RePlAce with relaxed density, restores partition state.
-  void runFlattenedPlacement(double density = 1.0);
-
-  // Phase 4 — iPL-3D paper §IV.B Algorithm 2 single-shot. Phase 4.1: stub.
-  // Phase 4.2 implements via GlobalTierOptimizer.
+  // Phase 4 — iPL-3D paper §IV.B Algorithm 2 single-shot.
   void runGlobalTierOptimization(double rho = 500.0,
                                  double alpha = 100.0,
                                  double beta = 0.5,
@@ -128,10 +119,6 @@ class MultiDieManager
   // uniform in cell width so standard dpl::Opendp loops; CellsLegalizer
   // is the right downstream legalizer once cells are y-aligned.
   void snapCellsToRows();
-
-  // Phase 4 — iPL-3D paper Algorithm 1 bilevel coordinator. Phase 4.1: stub.
-  // Phase 4.6 implements full SP-1 ↔ SP-2 alternation.
-  void run3DPlacement(int iterations = 4, bool no_alternating = false);
 
  private:
   void splitInstances();

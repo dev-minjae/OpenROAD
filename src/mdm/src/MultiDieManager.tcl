@@ -187,21 +187,7 @@ proc import_inst_coordinates { args } {
   mdm::import_coordinates $keys(-file)
 }
 
-# Phase 4 — iPL-3D paper §IV.A flattened init wrapper. Phase 4.1: stub.
-sta::define_cmd_args "run_flattened_placement" {[-density density]}
-
-proc run_flattened_placement { args } {
-  sta::parse_key_args "run_flattened_placement" args \
-    keys {-density} flags {}
-
-  set density 1.0
-  if { [info exists keys(-density)] } {
-    set density $keys(-density)
-  }
-  mdm::run_flattened_placement $density
-}
-
-# Phase 4 — iPL-3D paper §IV.B Algorithm 2 single-shot. Phase 4.1: stub.
+# Phase 4 — iPL-3D paper §IV.B Algorithm 2 single-shot.
 sta::define_cmd_args "run_global_tier_optimization" {\
     [-rho rho] [-alpha alpha] [-beta beta] [-gamma gamma] [-apply]}
 
@@ -258,21 +244,3 @@ proc snap_cells_to_rows { args } {
   mdm::snap_cells_to_rows
 }
 
-# Phase 4 — iPL-3D paper Algorithm 1 bilevel coordinator. Phase 4.1: stub.
-sta::define_cmd_args "run_3d_placement" {\
-    [-iterations iter] [-no_alternating]}
-
-proc run_3d_placement { args } {
-  sta::parse_key_args "run_3d_placement" args \
-    keys {-iterations} flags {-no_alternating}
-
-  set iterations 4
-  set no_alt 0
-  if { [info exists keys(-iterations)] } {
-    set iterations $keys(-iterations)
-  }
-  if { [info exists flags(-no_alternating)] } {
-    set no_alt 1
-  }
-  mdm::run_3d_placement $iterations $no_alt
-}
