@@ -29,6 +29,18 @@ class Opendp;
 
 namespace mdm {
 
+// ============================================================
+// Logger message ID convention (utl::MDM):
+//   1-99    : Stage 1/2 — split, switch, interconnect, IO pin
+//   100-199 : Tcl error/warn (utl::error MDM ...)
+//   200-299 : reserved
+//   300-399 : Phase 4 — Global Tier Opt, Planar Correcting, snap
+//   400+    : reserved for future phases
+// When adding a new ID, grep `utl::MDM` across src/mdm/ first.
+// Free IDs after the 4.x refactor cycle: 301, 302, 304, 305, 311
+// (formerly used by removed stubs / consolidated guards).
+// ============================================================
+
 class TestCaseManager;
 class GlobalTierOptimizer;
 struct TierOptParams;
