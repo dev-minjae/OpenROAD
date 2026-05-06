@@ -1,20 +1,28 @@
 #!/usr/bin/env bash
-# Phase 4 numerical lock: run case2 e2e, evaluate, compare HPWL to
-# baseline. Exits non-zero on regression.
+# Phase 4 numerical lock: run case e2e, evaluate, compare HPWL to baseline.
+# Exits non-zero on regression.
+#
+# Usage: regression_check.sh [case2|case3]   (default: case2)
 set -e
 
-BASELINE_HPWL=2694774
+CASE=${1:-case2}
 TOLERANCE_PCT=0.5
+
+case "$CASE" in
+    case2) BASELINE_HPWL=2694774 ;;
+    case3) BASELINE_HPWL=52217337 ;;
+    *) echo "FAIL: unknown case '$CASE' (expected case2 or case3)"; exit 2 ;;
+esac
 
 ROOT=/home/minjae/workspace/etc/openroad/OpenROAD
 ARCHIVE=/home/minjae/workspace/etc/openroad/archive/3d_ic
 OPENROAD=$ROOT/build/bin/openroad
 EVALUATOR=$ARCHIVE/tools/evaluator_0525
-CASE_INPUT=$ARCHIVE/benchmarks/iccad2022/case2.txt
-TCL=$ROOT/src/mdm/test/regression_phase4_case2.tcl
-OUTPUT=/tmp/regression_phase4_case2.out
-EVAL_LOG=/tmp/regression_phase4_eval.log
-RUN_LOG=/tmp/regression_phase4_run.log
+CASE_INPUT=$ARCHIVE/benchmarks/iccad2022/$CASE.txt
+TCL=$ROOT/src/mdm/test/regression_phase4_$CASE.tcl
+OUTPUT=/tmp/regression_phase4_$CASE.out
+EVAL_LOG=/tmp/regression_phase4_${CASE}_eval.log
+RUN_LOG=/tmp/regression_phase4_${CASE}_run.log
 
 echo "[1/3] Running OpenROAD ($TCL)..."
 $OPENROAD -no_init -no_splash -exit $TCL > $RUN_LOG 2>&1 || {
@@ -42,6 +50,7 @@ fi
 DIFF_PCT=$(echo "scale=4; ($HPWL - $BASELINE_HPWL) * 100 / $BASELINE_HPWL" | bc)
 ABS_DIFF_PCT=${DIFF_PCT#-}
 
+echo "Case:          $CASE"
 echo "Baseline HPWL: $BASELINE_HPWL"
 echo "Current HPWL:  $HPWL"
 echo "Diff:          $DIFF_PCT %  (tolerance +/- $TOLERANCE_PCT %)"
