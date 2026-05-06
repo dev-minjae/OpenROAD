@@ -209,9 +209,10 @@ proc run_global_tier_optimization { args } {
   sta::parse_key_args "run_global_tier_optimization" args \
     keys {-rho -alpha -beta -gamma} flags {-apply}
 
-  # Paper Table III default for ρ is 500 in normalized μm; in dbu
-  # (case scale=2000) that is ≈1M (see GlobalTierOptimizer.h comment).
-  set rho 1000000.0
+  # Paper Table III defaults — surrogate now runs in normalized μm
+  # (auto-converted from dbu via getICCADScale), so paper's constants
+  # apply directly.
+  set rho 500.0
   set alpha 100.0
   set beta 0.5
   set gamma 0.0

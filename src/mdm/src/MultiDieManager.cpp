@@ -728,6 +728,14 @@ std::pair<int, int> MultiDieManager::getMaxUtils() const
   return test_case_manager_->getMaxUtils();
 }
 
+int MultiDieManager::getICCADScale() const
+{
+  if (!test_case_manager_) {
+    return 1;
+  }
+  return std::max(1, test_case_manager_->getScale());
+}
+
 ////////////////////////////////////////////////////////////////
 // Phase 4 — iPL-3D Global Tier Optimization plumbing (skeleton).
 // Bodies are filled in Phases 4.2/4.4/4.6.
@@ -753,6 +761,9 @@ void MultiDieManager::runGlobalTierOptimization(double rho,
   params.alpha = alpha;
   params.beta = beta;
   params.gamma = gamma;
+  // dbu/μm conversion so the surrogate runs in paper's normalized μm
+  // units; paper Table III's ρ=500, α=100, β=0.5 then apply directly.
+  params.dbu_per_um = getICCADScale();
   // u_t/u_b come from the ICCAD case header (TestCaseManager). Defaults
   // hold if no ICCAD case parsed.
   auto utils = getMaxUtils();

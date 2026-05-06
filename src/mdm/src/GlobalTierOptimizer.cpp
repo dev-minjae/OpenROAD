@@ -234,25 +234,34 @@ GlobalTierOptimizer::MoveDelta GlobalTierOptimizer::evaluateMove(
 double GlobalTierOptimizer::overflow(const Context& ctx) const
 {
   // Paper Eq 10b: d(S) = Σ_{region r} max((A_r − M_r)/h_r, 0).
-  // Single-bin per die. Uses cached areas for O(1) work. Note that the
-  // S-cells contribute their from-tech area to the "from" overflow and
-  // their to-tech area to the "to" overflow (different libs may have
-  // different master sizes for the same cell).
+  // Single-bin per die. Uses cached areas for O(1) work.
+  //
+  // Returned in μm so paper's α=100 default applies directly. Internal
+  // arithmetic stays in dbu to avoid precision loss; conversion is the
+  // last step:
+  //   d_dbu = (over_area_dbu²) / row_height_dbu  → has units of dbu
+  //   d_um  = d_dbu / dbu_per_um
   const int64_t from_used = ctx.from_total_area - ctx.s_total_area_from;
   const int64_t to_used = ctx.to_existing_area + ctx.s_total_area_to;
   const int64_t from_over = std::max<int64_t>(from_used - ctx.cap_from_dbu, 0);
   const int64_t to_over = std::max<int64_t>(to_used - ctx.cap_t_dbu, 0);
-  return static_cast<double>(from_over + to_over)
-         / static_cast<double>(ctx.row_height);
+  const double d_dbu = static_cast<double>(from_over + to_over)
+                       / static_cast<double>(ctx.row_height);
+  return d_dbu / static_cast<double>(std::max(1, ctx.params.dbu_per_um));
 }
 
 double GlobalTierOptimizer::surrogateDelta(odb::dbInst* cell,
                                            const Context& ctx) const
 {
   const MoveDelta md = evaluateMove(cell, ctx);
-  const double d_before = overflow(ctx);
-  // d_after: cell shifts from "from" bin (loses from-tech area) to "to"
-  // bin (gains to-tech area).
+  // All length-like quantities (ΔWL, d) converted dbu → μm so paper's
+  // Table III constants (ρ=500, α=100, β=0.5, γ=0|1e4) apply directly.
+  // ΔTerm is dimensionless (count) — no conversion.
+  const double dbu_per_um
+      = static_cast<double>(std::max(1, ctx.params.dbu_per_um));
+  const double delta_wl_um = static_cast<double>(md.delta_wl) / dbu_per_um;
+
+  const double d_before = overflow(ctx);  // already in μm
   const int64_t c_from = cellAreaInFromTech(cell, ctx);
   const int64_t c_to = cellAreaInToTech(cell, ctx);
   const int64_t from_used_after
@@ -263,10 +272,12 @@ double GlobalTierOptimizer::surrogateDelta(odb::dbInst* cell,
       = std::max<int64_t>(from_used_after - ctx.cap_from_dbu, 0);
   const int64_t to_over_after
       = std::max<int64_t>(to_used_after - ctx.cap_t_dbu, 0);
-  const double d_after = static_cast<double>(from_over_after + to_over_after)
-                         / static_cast<double>(ctx.row_height);
+  const double d_after_dbu
+      = static_cast<double>(from_over_after + to_over_after)
+        / static_cast<double>(ctx.row_height);
+  const double d_after = d_after_dbu / dbu_per_um;
 
-  return static_cast<double>(md.delta_wl)
+  return delta_wl_um
          + ctx.params.rho * static_cast<double>(md.delta_term)
          + ctx.params.alpha * (d_after - d_before)
          - ctx.params.gamma * d_before;

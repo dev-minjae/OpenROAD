@@ -95,6 +95,12 @@ class MultiDieManager
   // {0, 0} if no ICCAD case has been parsed.
   std::pair<int, int> getMaxUtils() const;
 
+  // Returns the dbu/μm scale factor configured by `set_iccad_scale -scale`,
+  // or 1 if unset. Used by GlobalTierOptimizer to convert raw HPWL/area
+  // (dbu) into paper's normalized μm so that paper's Eq 10a constants
+  // (ρ=500, α=100, β=0.5) apply directly.
+  int getICCADScale() const;
+
   // Phase 4 — iPL-3D paper §IV.A flattened init wrapper. Phase 4.1: stub.
   // Phase 4.4 implements: temporarily homes all cells to one die, runs
   // RePlAce with relaxed density, restores partition state.

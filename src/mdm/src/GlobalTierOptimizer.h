@@ -26,15 +26,16 @@ namespace mdm {
 // iPL-3D paper §IV.B parameters (Table III defaults).
 struct TierOptParams
 {
-  // Paper Table III default for ρ is 500 in their normalized HPWL unit
-  // (likely μm). With OpenROAD's dbu (case scale=2000 → 1μm=2000 dbu)
-  // the dbu-equivalent default is ~1M. case2 measurement (2026-05-02)
-  // confirms: ρ=500 yields 1540 terminals (3.3× paper); ρ=1M yields
-  // 711 (1.5× paper) and improves e2e HPWL by 5%. Caller can override.
-  double rho = 1000000.0;  // terminal cost (in dbu units)
-  double alpha = 100.0;    // overflow cost
-  double beta = 0.5;       // overlap cost (Phase 4.2 sets β·Δo = 0)
-  double gamma = 0.0;      // 0 normally, 1e4 for high-density relief
+  // Paper Table III defaults — all in normalized HPWL unit (μm). Surrogate
+  // converts ΔWL and Δd from raw dbu to μm using `dbu_per_um` so these
+  // constants apply directly. Caller may override.
+  double rho = 500.0;     // terminal cost (paper Table III)
+  double alpha = 100.0;   // overflow cost
+  double beta = 0.5;      // overlap cost (Phase 4.2 sets β·Δo = 0)
+  double gamma = 0.0;     // 0 normally, 1e4 for high-density relief
+  // dbu/μm conversion. Set by caller from ICCAD scale (typically 2000).
+  // 1 means the surrogate runs in raw dbu (legacy behavior).
+  int dbu_per_um = 1;
   double B_factor = 1.0;   // knapsack: B = B_factor * u_t * A
                            // (paper Table III uses 1.1 assuming a follow-up
                            // detailed tier opt tightens; we run alone, so
