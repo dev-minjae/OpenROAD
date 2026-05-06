@@ -320,15 +320,18 @@ void MultiDieManager::makeInterconnections(odb::dbBlock* lower_block,
   odb::dbBlock* top_hier = db_->getChip()->getBlock();
   int interconnect_count = 0;
   for (auto* lower_net : lower_block->getNets()) {
-    // Skip nets we've already paired via an earlier makeInterconnections
-    // call (Phase 4.2 -apply path may invoke this incrementally after
-    // cross-die migrations).
-    if (auto* p = odb::dbBoolProperty::find(lower_net, "intersected")) {
-      if (p->getValue()) {
-        continue;
-      }
-    }
     const string net_name = lower_net->getName();
+    const string interconnect_name = net_name + "Interconnection";
+    // Cross-call idempotency: if this BTerm already exists in
+    // lower_block, the net has already been paired. The Phase 4.2
+    // -apply path may invoke this incrementally after cross-die
+    // migrations, so some lower_block nets are already paired from
+    // the initial set_3D_IC call. BTerm names are unique within a
+    // block, so a name lookup is a sufficient signal — no DB-state
+    // metadata required.
+    if (lower_block->findBTerm(interconnect_name.c_str()) != nullptr) {
+      continue;
+    }
     odb::dbNet* upper_net = upper_block->findNet(net_name.c_str());
     if (!upper_net) {
       continue;
@@ -340,7 +343,6 @@ void MultiDieManager::makeInterconnections(odb::dbBlock* lower_block,
       top_hier_net = odb::dbNet::create(top_hier, net_name.c_str());
     }
 
-    const string interconnect_name = net_name + "Interconnection";
     odb::dbBTerm* lower_term
         = odb::dbBTerm::create(lower_net, interconnect_name.c_str());
     odb::dbBTerm* upper_term
@@ -348,6 +350,9 @@ void MultiDieManager::makeInterconnections(odb::dbBlock* lower_block,
     lower_term->getITerm()->connect(top_hier_net);
     upper_term->getITerm()->connect(top_hier_net);
 
+    // The "intersected" dbBoolProperty marker is a downstream signal
+    // for CellsLegalizer (Stage 3.3 sibling-bbox cache), independent
+    // of the idempotency check above. Keep writing it.
     odb::dbBoolProperty::create(top_hier_net, "intersected", true);
     odb::dbBoolProperty::create(lower_net, "intersected", true);
     odb::dbBoolProperty::create(upper_net, "intersected", true);
