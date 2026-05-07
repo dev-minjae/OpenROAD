@@ -2,16 +2,21 @@
 # Phase 4 numerical lock: run case e2e, evaluate, compare HPWL to baseline.
 # Exits non-zero on regression.
 #
-# Usage: regression_check.sh [case2|case3]   (default: case2)
+# Usage: regression_check.sh [case2|case3|case4]   (default: case2)
+#
+# Baselines come from the divide-and-conquer flow: Xueyan post-GP frontend
+# (paper-equivalent partition + GP coord) + our backend. Measured against
+# paper Table I "Ours" column on ICCAD 2022 contest benchmarks.
 set -e
 
 CASE=${1:-case2}
 TOLERANCE_PCT=0.5
 
 case "$CASE" in
-    case2) BASELINE_HPWL=2694774 ;;
-    case3) BASELINE_HPWL=52217337 ;;
-    *) echo "FAIL: unknown case '$CASE' (expected case2 or case3)"; exit 2 ;;
+    case2) BASELINE_HPWL=2004424 ;;     # paper Ours 1,992,499 (gap +0.6%)
+    case3) BASELINE_HPWL=30229424 ;;    # paper Ours 30,234,112 (gap -0.02%)
+    case4) BASELINE_HPWL=265734241 ;;   # paper Ours 267,381,744 (gap -0.6%)
+    *) echo "FAIL: unknown case '$CASE' (expected case2|case3|case4)"; exit 2 ;;
 esac
 
 ROOT=/home/minjae/workspace/etc/openroad/OpenROAD
