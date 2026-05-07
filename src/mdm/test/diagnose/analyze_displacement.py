@@ -50,6 +50,32 @@ def parse_iccad_out(text):
     return result
 
 
+def die_cluster(cells, die_width, die_height, num_bins=50):
+    """Returns (peak/avg ratio, entropy in nats).
+    cells: dict {name: (x, y)}.
+    Bin grid is num_bins x num_bins covering [0, die_width] x [0, die_height]."""
+    if not cells:
+        return 0.0, 0.0
+    bin_w = die_width / num_bins
+    bin_h = die_height / num_bins
+    counts = np.zeros((num_bins, num_bins), dtype=np.int64)
+    for (x, y) in cells.values():
+        i = min(int(x / bin_w), num_bins - 1)
+        j = min(int(y / bin_h), num_bins - 1)
+        counts[i, j] += 1
+    peak = float(counts.max())
+    avg = float(counts.mean())
+    ratio = peak / avg if avg > 0 else 0.0
+    # Entropy from p_i = count_i / total over non-empty bins
+    total = counts.sum()
+    if total == 0:
+        return ratio, 0.0
+    p = counts.flatten() / total
+    p_nonzero = p[p > 0]
+    entropy = float(-(p_nonzero * np.log(p_nonzero)).sum())
+    return ratio, entropy
+
+
 def row_alignment(placement, row_height, tolerance=1):
     """Cells whose y is within `tolerance` of a multiple of `row_height` are
     counted as aligned. Returns (aligned_pct, avg_misalign)."""
@@ -176,11 +202,23 @@ def self_test_row_alignment():
     print("PASS row_alignment")
 
 
+def self_test_die_cluster():
+    # 50x50 bins on a 100x100 die. cells: 2 in bin (0,0), 1 in bin (49,49)
+    cells = {'A': (0, 0), 'B': (1, 1), 'C': (99, 99)}
+    peak_avg, entropy = die_cluster(cells, die_width=100, die_height=100, num_bins=50)
+    # peak=2, avg=3/(50*50)=0.0012, ratio=2/0.0012=1666.66
+    assert abs(peak_avg - 1666.6666) < 1.0, f"peak/avg wrong: {peak_avg}"
+    # entropy: 2 nonzero bins. p(bin1)=2/3, p(bin2)=1/3. H=-(2/3 log 2/3 + 1/3 log 1/3) = 0.6365 nats
+    assert abs(entropy - 0.6365) < 0.01, f"entropy wrong: {entropy}"
+    print("PASS die_cluster")
+
+
 def self_test():
     self_test_parser()
     self_test_partition_disagreement()
     self_test_displacement()
     self_test_row_alignment()
+    self_test_die_cluster()
     print("All self-tests PASSED")
 
 
