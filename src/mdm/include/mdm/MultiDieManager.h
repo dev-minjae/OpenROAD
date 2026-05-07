@@ -112,6 +112,16 @@ class MultiDieManager
   // (ρ=500, α=100, β=0.5) apply directly.
   int getICCADScale() const;
 
+  // Phase 4 — iPL-3D paper §IV.A flattened initial placement. Runs
+  // gpl::Replace::doInitialPlace + doNesterovPlace on the root block
+  // (single-die assumption per Theorem 1: doubling density threshold).
+  // Cells' 2D coords get populated in place; subsequent set_3D_IC + GTO
+  // can run without parse_iccad2022_output (no paper reference dependency).
+  void runFlattenedPlacement(double density,
+                             double target_density,
+                             int nesterov_max_iter,
+                             bool skip_io_mode);
+
   // Phase 4 — iPL-3D paper §IV.B Algorithm 2 single-shot.
   // u_t_percent / u_b_percent = 0 means fall back to the ICCAD case
   // header values (TestCaseManager::getMaxUtils). Non-zero overrides.

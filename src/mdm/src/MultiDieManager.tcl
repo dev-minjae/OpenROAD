@@ -187,6 +187,42 @@ proc import_inst_coordinates { args } {
   mdm::import_coordinates $keys(-file)
 }
 
+# Phase 4 — iPL-3D paper §IV.A flattened initial placement.
+# Runs gpl::Replace on the root block (single-die assumption per Theorem 1)
+# to generate cells' 2D coords without depending on paper-equivalent
+# reference output.
+sta::define_cmd_args "run_flattened_placement" {\
+    [-density density] \
+    [-target_density target_density] \
+    [-nesterov_max_iter n] \
+    [-no_skip_io_mode]}
+
+proc run_flattened_placement { args } {
+  sta::parse_key_args "run_flattened_placement" args \
+    keys {-density -target_density -nesterov_max_iter} \
+    flags {-no_skip_io_mode}
+
+  # paper §IV.A Theorem 1: doubling bin density threshold ≈ target_density 2.0
+  set density 1.0
+  set target_density 2.0
+  set nesterov_max_iter 5000
+  set skip_io_mode 1
+  if { [info exists keys(-density)] } {
+    set density $keys(-density)
+  }
+  if { [info exists keys(-target_density)] } {
+    set target_density $keys(-target_density)
+  }
+  if { [info exists keys(-nesterov_max_iter)] } {
+    set nesterov_max_iter $keys(-nesterov_max_iter)
+  }
+  if { [info exists flags(-no_skip_io_mode)] } {
+    set skip_io_mode 0
+  }
+  mdm::run_flattened_placement $density $target_density $nesterov_max_iter \
+                                $skip_io_mode
+}
+
 # Phase 4 — iPL-3D paper §IV.B Algorithm 2 single-shot.
 sta::define_cmd_args "run_global_tier_optimization" {\
     [-rho rho] [-alpha alpha] [-beta beta] [-gamma gamma] \

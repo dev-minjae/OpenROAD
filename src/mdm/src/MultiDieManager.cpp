@@ -868,6 +868,21 @@ int MultiDieManager::getICCADScale() const
 // Bodies are filled in Phases 4.2/4.4/4.6.
 ////////////////////////////////////////////////////////////////
 
+void MultiDieManager::runFlattenedPlacement(double density,
+                                            double target_density,
+                                            int nesterov_max_iter,
+                                            bool skip_io_mode)
+{
+  logger_->info(utl::MDM,
+                304,
+                "runFlattenedPlacement: stub (Task 1). density={}, "
+                "target_density={}, nesterov_max_iter={}, skip_io_mode={}.",
+                density,
+                target_density,
+                nesterov_max_iter,
+                skip_io_mode);
+}
+
 void MultiDieManager::runGlobalTierOptimization(double rho,
                                                 double alpha,
                                                 double beta,

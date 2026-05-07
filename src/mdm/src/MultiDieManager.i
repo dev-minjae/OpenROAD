@@ -104,6 +104,18 @@ import_coordinates(const std::string& file_name)
 }
 
 void
+run_flattened_placement(double density = 1.0,
+                        double target_density = 2.0,
+                        int nesterov_max_iter = 5000,
+                        bool skip_io_mode = true)
+{
+  getMultiDieManager()->runFlattenedPlacement(density,
+                                              target_density,
+                                              nesterov_max_iter,
+                                              skip_io_mode);
+}
+
+void
 run_global_tier_optimization(double rho = 500.0,
                              double alpha = 100.0,
                              double beta = 0.5,
