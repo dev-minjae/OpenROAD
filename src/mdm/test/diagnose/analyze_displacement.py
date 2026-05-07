@@ -27,6 +27,31 @@ Inst C2 200 300
 """
 
 
+SAMPLE_CASE_INPUT = """\
+NumTechnologies 1
+Tech TA 3
+LibCell MC1 10 20 2
+Pin P1 1 2
+Pin P2 3 4
+LibCell MC2 5 5 1
+Pin P1 0 0
+LibCell MC3 100 100 1
+Pin P1 50 50
+NumInsts 3
+Inst C1 MC1
+Inst C2 MC2
+Inst C3 MC3
+NumNets 2
+Net N1 2
+Pin C1 P1
+Pin C2 P1
+Net N2 3
+Pin C1 P2
+Pin C2 P1
+Pin C3 P1
+"""
+
+
 def parse_iccad_out(text):
     """Parse ICCAD .out format. Returns {'top': {name: (x, y)}, 'bottom': {name: (x, y)}}.
     Terminal lines are ignored — only cell instances matter for displacement."""
@@ -48,6 +73,68 @@ def parse_iccad_out(text):
             y = int(parts[3])
             result[section][name] = (x, y)
     return result
+
+
+def parse_case_input(text):
+    """Parse ICCAD case file. Returns {lib_area: {lib_name: area},
+    inst_lib: {inst_name: lib_name}, fanout: {inst_name: int}}."""
+    lib_area = {}
+    inst_lib = {}
+    fanout = defaultdict(int)
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        parts = lines[i].strip().split()
+        if not parts:
+            i += 1
+            continue
+        if parts[0] == 'LibCell':
+            # LibCell <name> <width> <height> <num_pins>
+            name, w, h = parts[1], int(parts[2]), int(parts[3])
+            lib_area[name] = w * h
+            i += 1  # skip pin lines (we don't need them here)
+            continue
+        if parts[0] == 'Inst' and len(parts) >= 3 and parts[2].startswith('MC'):
+            # "Inst C1 MC1" — instance definition
+            inst_lib[parts[1]] = parts[2]
+            i += 1
+            continue
+        if parts[0] == 'Net':
+            # Net N1 <pin_count>
+            pin_count = int(parts[2])
+            i += 1
+            for _ in range(pin_count):
+                if i >= len(lines):
+                    break
+                pp = lines[i].strip().split()
+                if len(pp) >= 3 and pp[0] == 'Pin':
+                    fanout[pp[1]] += 1
+                i += 1
+            continue
+        i += 1
+    return {'lib_area': lib_area, 'inst_lib': inst_lib, 'fanout': dict(fanout)}
+
+
+def big_displacement(ours, paper, case_info, k=20):
+    """Top-K by Euclidean displacement (same-die cells only).
+    Returns list of dicts: [{inst, disp, lib_cell, area, fanout}, ...]."""
+    items = []
+    for die in ('top', 'bottom'):
+        common = set(ours[die].keys()) & set(paper[die].keys())
+        for name in common:
+            ox, oy = ours[die][name]
+            px, py = paper[die][name]
+            d = ((ox - px) ** 2 + (oy - py) ** 2) ** 0.5
+            lib = case_info['inst_lib'].get(name, '?')
+            items.append({
+                'inst': name,
+                'disp': d,
+                'lib_cell': lib,
+                'area': case_info['lib_area'].get(lib, 0),
+                'fanout': case_info['fanout'].get(name, 0),
+            })
+    items.sort(key=lambda x: x['disp'], reverse=True)
+    return items[:k]
 
 
 def die_cluster(cells, die_width, die_height, num_bins=50):
@@ -213,12 +300,44 @@ def self_test_die_cluster():
     print("PASS die_cluster")
 
 
+def self_test_case_input_parser():
+    info = parse_case_input(SAMPLE_CASE_INPUT)
+    # libs: MC1 (10*20=200), MC2 (5*5=25), MC3 (100*100=10000)
+    assert info['lib_area']['MC1'] == 200, f"MC1 area: {info['lib_area']}"
+    assert info['lib_area']['MC2'] == 25
+    # inst→lib: C1→MC1, C2→MC2, C3→MC3
+    assert info['inst_lib']['C1'] == 'MC1', f"inst_lib: {info['inst_lib']}"
+    # fanout: C1 in N1+N2=2, C2 in N1+N2=2, C3 in N2=1
+    assert info['fanout']['C1'] == 2, f"fanout: {info['fanout']}"
+    assert info['fanout']['C3'] == 1
+    print("PASS case_input_parser")
+
+
+def self_test_big_displacement():
+    case_info = parse_case_input(SAMPLE_CASE_INPUT)
+    ours = {'top': {'C1': (0, 0), 'C2': (0, 0), 'C3': (0, 0)}, 'bottom': {}}
+    paper = {'top': {'C1': (10, 0), 'C2': (5, 0), 'C3': (1000, 0)}, 'bottom': {}}
+    # C1 disp=10, C2 disp=5, C3 disp=1000
+    # top-2 by disp: C3 (1000), C1 (10)
+    top = big_displacement(ours, paper, case_info, k=2)
+    assert len(top) == 2
+    assert top[0]['inst'] == 'C3', f"top0: {top[0]}"
+    assert top[0]['disp'] == 1000.0
+    assert top[0]['lib_cell'] == 'MC3'
+    assert top[0]['area'] == 10000
+    assert top[0]['fanout'] == 1
+    assert top[1]['inst'] == 'C1'
+    print("PASS big_displacement")
+
+
 def self_test():
     self_test_parser()
     self_test_partition_disagreement()
     self_test_displacement()
     self_test_row_alignment()
     self_test_die_cluster()
+    self_test_case_input_parser()
+    self_test_big_displacement()
     print("All self-tests PASSED")
 
 
