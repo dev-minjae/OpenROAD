@@ -43,12 +43,12 @@ Inst C2 MC2
 Inst C3 MC3
 NumNets 2
 Net N1 2
-Pin C1 P1
-Pin C2 P1
+Pin C1/P1
+Pin C2/P1
 Net N2 3
-Pin C1 P2
-Pin C2 P1
-Pin C3 P1
+Pin C1/P2
+Pin C2/P1
+Pin C3/P1
 """
 
 
@@ -101,14 +101,16 @@ def parse_case_input(text):
             continue
         if parts[0] == 'Net':
             # Net N1 <pin_count>
+            # Followed by pin_count lines like "Pin C2542/P1" (inst/pin slash-form)
             pin_count = int(parts[2])
             i += 1
             for _ in range(pin_count):
                 if i >= len(lines):
                     break
                 pp = lines[i].strip().split()
-                if len(pp) >= 3 and pp[0] == 'Pin':
-                    fanout[pp[1]] += 1
+                if len(pp) >= 2 and pp[0] == 'Pin' and '/' in pp[1]:
+                    inst_name = pp[1].split('/', 1)[0]
+                    fanout[inst_name] += 1
                 i += 1
             continue
         i += 1

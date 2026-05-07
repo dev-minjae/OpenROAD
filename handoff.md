@@ -49,29 +49,36 @@ bash src/mdm/test/regression_check.sh case4  # ~10분, PASS, HPWL 265,734,241
 
 ## 4. 남은 작업 (다음 cycle 후보)
 
-### 1순위 — Phase 4.4 Flattened Init wrapper 신규 구현
+진단 결과 (`docs/agents/phase4-gto-output-diagnosis.md`) 반영. 우선순위 업데이트.
 
-이번 cycle 의 W2 시도 (raw coord + paper partition + 우리 Planar + 우리 SemiLeg) 가 막힌 직접적 원인. ICCAD 2022 raw input 은 cell 좌표 정보 없음 → `set_3D_IC` 후 cells unplaced → `gpl::Replace` movable instances=0 crash.
+### 1순위 — GTO output cluster 분포 paper 화
 
-해결책: `runFlattenedPlacement` Tcl command 부활. 우리 자체 flat 2D GP (gpl::Replace::doNesterovPlace 1-pass on the unified flat layout). 이전 cycle 에서 YAGNI 로 삭제됨 — 정식으로 다시 추가.
+진단 결과: 모든 case 에서 우리 GTO 출력의 die cluster peak/avg 가 paper 보다 38-71% 더 큼 (cells cluster 더 심함). entropy 도 항상 lower (less uniform). 이 cluster 가 SemiLeg 의 +84.6% overhead (case3) 의 핵심 원인 후보.
 
-가치:
-- W2/W3 시나리오 측정 가능 → 우리 GP/Planar quality 단독 검증
-- Xueyan 데이터 의존성 제거 → ICCAD 외 임의 디자인 처리
-- paper draft 시 "Xueyan 데이터 빌려옴" 약점 제거
+해법 후보:
+- **archive reference_impl 와 line-by-line diff** — `/home/minjae/workspace/etc/openroad/archive/3d_ic/reference_impl/mdm/src/` 와 우리 `src/mdm/src/GlobalTierOptimizer.cpp` 비교. b_factor / alpha / beta / gamma defaults, knapsack scoring criteria 차이 발견
+- **multi-bin overflow** (Phase 4.2 잔여) — 현재 single-bin per die. paper §IV.B-3 의 region grid 도입하면 cluster 분포 균일화
+- **GTO migration 시 displacement penalty** 추가
 
-### 2순위 — case3 marginal 추월 (paper -0.02% → 명백한 추월)
+### 2순위 — Partition disagreement 22-34% 줄이기
 
-backend 의 SemiLeg/TermLeg 미세 개선:
-- CellsLegalizer pairSwap 추가 iteration
-- SemiLeg displacement penalty
-- TermLeg r-tree refinement passes 증가
+진단 결과: 우리 ↔ paper 의 die 배정 disagreement 가 case2 26%, case3 34%, case4 22%. 약 1/4~1/3 cells 가 잘못된 die 로 가서 SemiLeg 가 push around.
 
-### 3순위 — case4 의 -0.6% 격차 더 키우기 (1순위/2순위 작업이 비례 효과)
+1순위와 같은 분석 (archive reference_impl diff) 으로 해결 가능. 1순위와 묶어서 처리 가능성.
 
-### 보류 — Phase 4.6 Bilevel Coordinator (paper Algorithm 1)
+### 3순위 — Planar Correcting 의 row 보존 (case2 만 영향)
 
-paper Table IV ablation 는 alternating 없이도 case3 30.33M 나옴. 우리 baseline 이 이미 paper-class 이라 Bilevel 의 marginal value 작음. 추후 paper "+X%" claim 가치를 분명히 증가시키는 게 확인되면 추가.
+case2 (sparse) 에서 Planar 가 row 정렬 79.9% → 16.7% 로 깨뜨림. dense case3/4 는 처음부터 row-aligned 아니라 무관. case2 만 한정된 leverage.
+
+해법: Planar Correcting 후 `snapCellsToRows` 자동 호출, 또는 Planar Nesterov cost function 에 row-snap term 추가.
+
+### 4순위 (이전 1순위에서 강등) — Phase 4.4 Flattened Init wrapper
+
+진단으로 보면 frontend (flat 2D GP) 가 본질적 leverage point 아님. paper coord 받아서도 우리 GTO + Planar 가 cluster + row 깨뜨림 → 진짜 leverage 는 GTO/Planar 알고리즘 자체. Phase 4.4 는 외부 데이터 의존성 제거의 가치 (별도 motivation) 는 있지만 paper 추월의 직접 leverage 아님.
+
+### 보류 — Phase 4.6 Bilevel Coordinator
+
+paper Table IV ablation 는 alternating 없이도 case3 30.33M 나옴. 우리 baseline 이 이미 paper-class 이라 Bilevel 의 marginal value 작음.
 
 ### 보류 — Phase 4.7 Cross-die move, Phase 4.8 from-scratch bench
 
