@@ -66,6 +66,12 @@ struct PlaceOptions
   bool routabilityUseRudy = true;
   bool disableRevertIfDiverge = false;
   bool disablePinDensityAdjust = false;
+  // Skip the per-PlacerBase utilization > 100% hard error. Used by
+  // multi-die flat-init flows that intentionally pack two dies' cells
+  // into one root block (paper iPL-3D §IV.A Theorem 1: "doubling the
+  // threshold of bin density"). The Nesterov density penalty still
+  // governs convergence.
+  bool skipDensityCheck = false;
   bool enable_routing_congestion = false;
   float minPhiCoef = 0.95;
   float maxPhiCoef = 1.05;

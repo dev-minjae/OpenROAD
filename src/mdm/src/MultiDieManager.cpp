@@ -873,14 +873,38 @@ void MultiDieManager::runFlattenedPlacement(double density,
                                             int nesterov_max_iter,
                                             bool skip_io_mode)
 {
+  if (!replace_) {
+    logger_->error(
+        utl::MDM, 311, "runFlattenedPlacement: gpl::Replace pointer is null.");
+    return;
+  }
+  // Per paper §IV.A Theorem 1: single-die assumption with doubled bin
+  // density threshold. We map this to gpl::PlaceOptions.density (target
+  // bin density). target_density=2.0 reflects the doubling.
+  // density (param) is the design-level density target, currently passed
+  // through but unused by gpl::PlaceOptions directly (kept for future).
+  (void) density;
+  gpl::PlaceOptions opts;
+  opts.density = target_density;
+  opts.nesterovPlaceMaxIter = nesterov_max_iter;
+  opts.skipIoMode = skip_io_mode;
+  // root block packs cells from both dies → utilization > 100% on the
+  // single-die area. Theorem 1 of paper §IV.A justifies relaxing the
+  // check (doubling the density threshold). Density tracking still applies.
+  opts.skipDensityCheck = true;
   logger_->info(utl::MDM,
                 304,
-                "runFlattenedPlacement: stub (Task 1). density={}, "
-                "target_density={}, nesterov_max_iter={}, skip_io_mode={}.",
-                density,
+                "runFlattenedPlacement: starting (target_density={}, "
+                "nesterov_max_iter={}, skip_io_mode={}).",
                 target_density,
                 nesterov_max_iter,
                 skip_io_mode);
+  replace_->doInitialPlace(/*threads=*/1, opts);
+  const int final_iter = replace_->doNesterovPlace(/*threads=*/1, opts);
+  logger_->info(utl::MDM,
+                305,
+                "runFlattenedPlacement: done. Nesterov final iter={}.",
+                final_iter);
 }
 
 void MultiDieManager::runGlobalTierOptimization(double rho,

@@ -109,23 +109,23 @@ void Replace::doIncrementalPlace(const int threads, const PlaceOptions& options)
     // Top-level block
     auto top_block = db_->getChip()->getBlock();
     pbVec_.push_back(
-        std::make_shared<PlacerBase>(db_, pbc_, log_, true, top_block));
+        std::make_shared<PlacerBase>(db_, pbc_, log_, !options.skipDensityCheck, top_block));
 
     for (auto pd : top_block->getRegions()) {
       for (auto group : pd->getGroups()) {
         pbVec_.push_back(std::make_shared<PlacerBase>(
-            db_, pbc_, log_, true, top_block, group));
+            db_, pbc_, log_, !options.skipDensityCheck, top_block, group));
       }
     }
 
     // Child blocks (multi-die)
     for (auto* child_block : top_block->getChildren()) {
       pbVec_.push_back(
-          std::make_shared<PlacerBase>(db_, pbc_, log_, true, child_block));
+          std::make_shared<PlacerBase>(db_, pbc_, log_, !options.skipDensityCheck, child_block));
       for (auto pd : child_block->getRegions()) {
         for (auto group : pd->getGroups()) {
           pbVec_.push_back(std::make_shared<PlacerBase>(
-              db_, pbc_, log_, true, child_block, group));
+              db_, pbc_, log_, !options.skipDensityCheck, child_block, group));
         }
       }
     }
@@ -193,23 +193,23 @@ void Replace::doInitialPlace(const int threads, const PlaceOptions& options)
     // Top-level block
     auto top_block = db_->getChip()->getBlock();
     pbVec_.push_back(
-        std::make_shared<PlacerBase>(db_, pbc_, log_, true, top_block));
+        std::make_shared<PlacerBase>(db_, pbc_, log_, !options.skipDensityCheck, top_block));
 
     for (auto pd : top_block->getRegions()) {
       for (auto group : pd->getGroups()) {
         pbVec_.push_back(std::make_shared<PlacerBase>(
-            db_, pbc_, log_, true, top_block, group));
+            db_, pbc_, log_, !options.skipDensityCheck, top_block, group));
       }
     }
 
     // Child blocks (multi-die)
     for (auto* child_block : top_block->getChildren()) {
       pbVec_.push_back(
-          std::make_shared<PlacerBase>(db_, pbc_, log_, true, child_block));
+          std::make_shared<PlacerBase>(db_, pbc_, log_, !options.skipDensityCheck, child_block));
       for (auto pd : child_block->getRegions()) {
         for (auto group : pd->getGroups()) {
           pbVec_.push_back(std::make_shared<PlacerBase>(
-              db_, pbc_, log_, true, child_block, group));
+              db_, pbc_, log_, !options.skipDensityCheck, child_block, group));
         }
       }
     }
