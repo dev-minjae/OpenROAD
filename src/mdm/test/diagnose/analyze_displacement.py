@@ -341,14 +341,92 @@ def self_test():
     print("All self-tests PASSED")
 
 
+def render_markdown(case_name, variant, ours_path, paper_path, case_input_path):
+    with open(ours_path) as f:
+        ours = parse_iccad_out(f.read())
+    with open(paper_path) as f:
+        paper = parse_iccad_out(f.read())
+    with open(case_input_path) as f:
+        case_info = parse_case_input(f.read())
+
+    # row_height + die size from TopDieRows header
+    row_height = None
+    die_width = die_height = None
+    with open(case_input_path) as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) >= 6 and parts[0] == 'TopDieRows':
+                # TopDieRows <x_origin> <y_origin> <width> <height> <num_rows>
+                row_height = int(parts[4])
+                die_width = int(parts[3])
+                die_height = row_height * int(parts[5])
+                break
+    if row_height is None:
+        raise RuntimeError(f"row_height not found in {case_input_path}")
+
+    out = []
+    out.append(f"\n## {case_name} — {variant}\n")
+
+    pct, count, total = partition_disagreement(ours, paper)
+    out.append(f"**Partition disagreement**: {pct:.2f}% ({count} cells out of {total} total)\n")
+
+    stats, hist = displacement(ours, paper)
+    out.append(f"**Displacement** (same-die cells, {stats['count']} instances):\n")
+    out.append("| metric | value (ICCAD units) |")
+    out.append("|---|---|")
+    out.append(f"| P50  | {stats['p50']:.0f} |")
+    out.append(f"| P90  | {stats['p90']:.0f} |")
+    out.append(f"| P99  | {stats['p99']:.0f} |")
+    out.append(f"| max  | {stats['max']:.0f} |")
+    out.append(f"| mean | {stats['mean']:.0f} |")
+    out.append(f"| std  | {stats['std']:.0f} |")
+    out.append("")
+    out.append("Histogram (Euclidean):\n```")
+    if hist:
+        max_n = max(n for _, n in hist) or 1
+        for label, n in hist:
+            bar = '█' * int(40 * n / max_n)
+            out.append(f"{label:>10s} {bar} {n}")
+    out.append("```\n")
+
+    pct_align, avg_mis = row_alignment(ours, row_height)
+    out.append(f"**Row-alignment** (ours): {pct_align:.1f}% aligned, avg misalign {avg_mis:.1f}")
+    pct_align_paper, avg_mis_paper = row_alignment(paper, row_height)
+    out.append(f"**Row-alignment** (paper): {pct_align_paper:.1f}% aligned, avg misalign {avg_mis_paper:.1f}\n")
+
+    for die_label, die_key in (('TopDie', 'top'), ('BottomDie', 'bottom')):
+        ratio_ours, ent_ours = die_cluster(ours[die_key], die_width, die_height)
+        ratio_paper, ent_paper = die_cluster(paper[die_key], die_width, die_height)
+        out.append(f"**Die cluster** ({die_label}, ours): peak/avg = {ratio_ours:.2f}, entropy {ent_ours:.2f} nats")
+        out.append(f"**Die cluster** ({die_label}, paper): peak/avg = {ratio_paper:.2f}, entropy {ent_paper:.2f} nats")
+    out.append("")
+
+    top_k = big_displacement(ours, paper, case_info, k=20)
+    out.append("**Top-20 displacement cells**:\n")
+    out.append("| inst | fanout | lib_cell | area | disp |")
+    out.append("|---|---|---|---|---|")
+    for item in top_k:
+        out.append(f"| {item['inst']} | {item['fanout']} | {item['lib_cell']} | {item['area']} | {item['disp']:.0f} |")
+    out.append("\n---\n")
+    return '\n'.join(out)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--self-test', action='store_true')
+    parser.add_argument('--ours')
+    parser.add_argument('--paper')
+    parser.add_argument('--case-input')
+    parser.add_argument('--case-name')
+    parser.add_argument('--variant')
     args = parser.parse_args()
     if args.self_test:
         self_test()
         return
-    print("(main not implemented yet)")
+    if not all([args.ours, args.paper, args.case_input, args.case_name, args.variant]):
+        sys.stderr.write("Need --ours, --paper, --case-input, --case-name, --variant (or --self-test)\n")
+        sys.exit(2)
+    print(render_markdown(args.case_name, args.variant, args.ours, args.paper, args.case_input))
 
 
 if __name__ == '__main__':
