@@ -50,6 +50,26 @@ def parse_iccad_out(text):
     return result
 
 
+def row_alignment(placement, row_height, tolerance=1):
+    """Cells whose y is within `tolerance` of a multiple of `row_height` are
+    counted as aligned. Returns (aligned_pct, avg_misalign)."""
+    total = 0
+    aligned = 0
+    misalign_sum = 0
+    for die in ('top', 'bottom'):
+        for _, (_, y) in placement[die].items():
+            total += 1
+            misalign = y % row_height
+            # misalign close to 0 OR close to row_height (other side of mod)
+            d = min(misalign, row_height - misalign)
+            if d <= tolerance:
+                aligned += 1
+            misalign_sum += d
+    if total == 0:
+        return 0.0, 0.0
+    return 100.0 * aligned / total, misalign_sum / total
+
+
 def displacement(ours, paper):
     """Per-cell Euclidean displacement of same-die cells.
     Returns (stats_dict, histogram_pairs).
@@ -144,10 +164,23 @@ def self_test_displacement():
     print("PASS displacement (rich)")
 
 
+def self_test_row_alignment():
+    # row_height=10, cells y={0, 5, 10, 17, 20}
+    # aligned (within 1 of 0 mod 10): y=0 (0), y=10 (0), y=20 (0). 3/5 = 60%
+    # avg misalign = (0+5+0+3+0)/5 = 1.6 (note: misalign for 17 is min(7, 10-7)=3)
+    placement = {'top': {'A': (0, 0), 'B': (0, 5), 'C': (0, 10), 'D': (0, 17), 'E': (0, 20)},
+                 'bottom': {}}
+    pct, avg = row_alignment(placement, row_height=10, tolerance=1)
+    assert pct == 60.0, f"pct wrong: {pct}"
+    assert abs(avg - 1.6) < 0.01, f"avg wrong: {avg}"
+    print("PASS row_alignment")
+
+
 def self_test():
     self_test_parser()
     self_test_partition_disagreement()
     self_test_displacement()
+    self_test_row_alignment()
     print("All self-tests PASSED")
 
 
