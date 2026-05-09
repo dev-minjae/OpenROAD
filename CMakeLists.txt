@@ -106,7 +106,20 @@ endif()
 # (e.g. src/gpl) key off ENABLE_GPU and Kokkos_ENABLE_*; they no longer need
 # to call find_package(Kokkos) or enable_language() themselves.
 if(ENABLE_GPU)
-  find_package(Kokkos REQUIRED)
+  find_package(Kokkos QUIET)
+  if(NOT Kokkos_FOUND)
+    message(FATAL_ERROR
+      "OpenROAD: ENABLE_GPU=ON requires the Kokkos package to be "
+      "installed and discoverable by CMake, but Kokkos was not found.\n"
+      "  - If Kokkos is already installed: pass "
+      "-DKokkos_ROOT=/path/to/kokkos (or extend CMAKE_PREFIX_PATH).\n"
+      "  - If not: build and install Kokkos from "
+      "https://github.com/kokkos/kokkos with the desired backend "
+      "(CUDA / HIP / SYCL / OpenMP) and a target architecture that "
+      "matches the host GPU.\n"
+      "  - A future etc/DependencyInstaller.sh -gpu option will "
+      "automate this step.")
+  endif()
   message(STATUS "OpenROAD: GPU acceleration enabled (Kokkos ${Kokkos_VERSION})")
   if(Kokkos_ENABLE_CUDA)
     # Auto-discover nvcc when the user has CUDA installed at a standard
