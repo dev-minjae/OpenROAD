@@ -11,14 +11,13 @@
 // (Serial / OpenMP / Threads / CUDA) and against the OpenMP CPU loop.
 
 #include <Kokkos_Core.hpp>
-#include <cassert>
 #include <climits>
 #include <cstdint>
 #include <cstdlib>
+#include <mutex>
 #include <vector>
 
 #include "nesterovBase.h"
-#include "omp.h"
 
 namespace gpl {
 
@@ -27,34 +26,30 @@ namespace gpl {
 // Kokkos exists. The first GPU HPWL call initializes Kokkos and registers
 // an atexit handler that finalizes it once at process shutdown — this is
 // the upstream-safe pattern for opt-in CUDA backends without disrupting
-// OpenROAD's existing main().
+// OpenROAD's existing main(). std::call_once keeps the initialization
+// safe if a future caller drops the master-thread invariant.
 namespace {
 void ensureKokkosInitialized()
 {
-  if (Kokkos::is_initialized()) {
-    return;
-  }
-  // Pin OpenMP threads if the user has not set a policy already; this both
-  // matches Kokkos's preferred host-parallel binding and suppresses the
-  // "OMP_PROC_BIND not set" warning that would otherwise contaminate the
-  // process stderr (and golden-file regression diffs).
-  setenv("OMP_PROC_BIND", "spread", /*overwrite=*/0);
-  setenv("OMP_PLACES", "threads", /*overwrite=*/0);
-  Kokkos::InitializationSettings settings;
-  settings.set_disable_warnings(true);
-  Kokkos::initialize(settings);
-  std::atexit([] {
-    if (Kokkos::is_initialized() && !Kokkos::is_finalized()) {
-      Kokkos::finalize();
+  static std::once_flag once;
+  std::call_once(once, [] {
+    if (Kokkos::is_initialized()) {
+      return;
     }
+    Kokkos::InitializationSettings settings;
+    settings.set_disable_warnings(true);
+    Kokkos::initialize(settings);
+    std::atexit([] {
+      if (Kokkos::is_initialized() && !Kokkos::is_finalized()) {
+        Kokkos::finalize();
+      }
+    });
   });
 }
 }  // namespace
 
 int64_t NesterovBaseCommon::getHpwl()
 {
-  assert(omp_get_thread_num() == 0);
-
   const int n_nets = static_cast<int>(gNetStor_.size());
   if (n_nets == 0) {
     return 0;
