@@ -130,32 +130,46 @@ if(ENABLE_GPU)
     endif()
     # nvcc < 13 cannot parse glibc 2.38+'s _Float128 type that ships with
     # gcc 13+'s C++ standard library headers (math.h template specialization
-    # for __iseqsig_type<_Float128>). Pin a compatible older g++ as the CUDA
-    # host compiler if one is installed alongside the system gcc; users keep
-    # g++-13 as their default C++ compiler. Override via
-    # -DCMAKE_CUDA_HOST_COMPILER or CUDAHOSTCXX if desired.
+    # for __iseqsig_type<_Float128>). When a known-broken pairing is detected,
+    # pin a compatible older g++ as the CUDA host compiler (the system C++
+    # compiler stays unchanged for non-CUDA TUs). Override is always
+    # available via -DCMAKE_CUDA_HOST_COMPILER or CUDAHOSTCXX.
     if(NOT DEFINED CMAKE_CUDA_HOST_COMPILER AND NOT DEFINED ENV{CUDAHOSTCXX}
        AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
-       AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "13.0")
-      foreach(_OPENROAD_GXX_VER 12 11)
-        find_program(_OPENROAD_CUDAHOST g++-${_OPENROAD_GXX_VER}
-          HINTS /usr/bin /usr/local/bin)
-        if(_OPENROAD_CUDAHOST)
-          set(CMAKE_CUDA_HOST_COMPILER "${_OPENROAD_CUDAHOST}" CACHE FILEPATH "")
-          message(STATUS
-            "OpenROAD: pinning CUDA host compiler to ${_OPENROAD_CUDAHOST} "
-            "(nvcc + glibc/gcc 13+ compat)")
-          break()
+       AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "13.0"
+       AND _OPENROAD_NVCC)
+      execute_process(
+        COMMAND "${_OPENROAD_NVCC}" --version
+        OUTPUT_VARIABLE _OPENROAD_NVCC_VERSION_OUTPUT
+        ERROR_QUIET
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+      if(_OPENROAD_NVCC_VERSION_OUTPUT MATCHES "release ([0-9]+)")
+        set(_OPENROAD_NVCC_MAJOR "${CMAKE_MATCH_1}")
+        if(_OPENROAD_NVCC_MAJOR LESS 13)
+          foreach(_OPENROAD_GXX_VER 12 11)
+            find_program(_OPENROAD_CUDAHOST g++-${_OPENROAD_GXX_VER}
+              HINTS /usr/bin /usr/local/bin)
+            if(_OPENROAD_CUDAHOST)
+              set(CMAKE_CUDA_HOST_COMPILER "${_OPENROAD_CUDAHOST}"
+                CACHE FILEPATH "")
+              message(STATUS
+                "OpenROAD: pinning CUDA host compiler to "
+                "${_OPENROAD_CUDAHOST} (nvcc ${_OPENROAD_NVCC_MAJOR}.x + "
+                "glibc/gcc 13+ _Float128 compat)")
+              break()
+            endif()
+            unset(_OPENROAD_CUDAHOST CACHE)
+          endforeach()
+          if(NOT DEFINED CMAKE_CUDA_HOST_COMPILER)
+            message(FATAL_ERROR
+              "OpenROAD: nvcc ${_OPENROAD_NVCC_MAJOR}.x cannot parse "
+              "_Float128 declarations in glibc 2.38+ system headers used "
+              "by gcc ${CMAKE_CXX_COMPILER_VERSION}, and no compatible "
+              "g++-12 / g++-11 was found in /usr/bin or /usr/local/bin. "
+              "Install one (e.g. apt install g++-12) or set "
+              "-DCMAKE_CUDA_HOST_COMPILER=/path/to/older-g++ explicitly.")
+          endif()
         endif()
-        unset(_OPENROAD_CUDAHOST CACHE)
-      endforeach()
-      if(NOT DEFINED CMAKE_CUDA_HOST_COMPILER)
-        message(WARNING
-          "OpenROAD: system gcc is ${CMAKE_CXX_COMPILER_VERSION} and no "
-          "g++-12 / g++-11 was found; nvcc < 13 may fail to parse "
-          "_Float128 in glibc 2.38+ headers. Install a compatible host "
-          "compiler (e.g. apt install g++-12) or set "
-          "-DCMAKE_CUDA_HOST_COMPILER=/path/to/older-g++ explicitly.")
       endif()
     endif()
     if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR "${CMAKE_CUDA_ARCHITECTURES}" STREQUAL "")
@@ -163,8 +177,13 @@ if(ENABLE_GPU)
          AND NOT "${Kokkos_CUDA_ARCHITECTURES}" STREQUAL "")
         set(CMAKE_CUDA_ARCHITECTURES "${Kokkos_CUDA_ARCHITECTURES}")
       else()
-        # Probe the host GPU at configure time (CMake >= 3.24).
-        set(CMAKE_CUDA_ARCHITECTURES "native")
+        message(FATAL_ERROR
+          "OpenROAD: ENABLE_GPU=ON with Kokkos CUDA backend, but the "
+          "Kokkos package does not advertise Kokkos_CUDA_ARCHITECTURES "
+          "and CMAKE_CUDA_ARCHITECTURES was not provided. Set "
+          "-DCMAKE_CUDA_ARCHITECTURES=<arch> explicitly (e.g. 89 for "
+          "RTX 4070, 120 for RTX 5090) or rebuild Kokkos with the "
+          "target architecture baked in.")
       endif()
     endif()
     enable_language(CUDA)

@@ -43,11 +43,37 @@ add_library(gpl_lib
 
 # --- HPWL backend selection (link-time dispatch) ---
 # Exactly one translation unit defines NesterovBaseCommon::getHpwl(): either
-# the OpenMP loop in src/hpwl.cpp (default) or the Kokkos kernel pulled in
-# from the src/gpu/ subdirectory when ENABLE_GPU=ON. CMake enforces ODR;
-# the consumer-facing headers and sources stay free of preprocessor branches.
+# the OpenMP loop in src/hpwl.cpp (default) or the Kokkos kernel in
+# src/gpu/hpwl.cpp when ENABLE_GPU=ON. CMake enforces ODR; the
+# consumer-facing headers and sources stay free of preprocessor branches.
+# gpu/ is a file-layout subdirectory only (no nested CMakeLists.txt) so
+# kernel build settings stay in this module's CMakeLists with the rest
+# of gpl_lib.
 if(ENABLE_GPU)
-  add_subdirectory(src/gpu)
+  target_sources(gpl_lib PRIVATE src/gpu/hpwl.cpp)
+  # nesterovBase.h and other private gpl headers live in src/; sources
+  # under src/gpu/ need that on the include path explicitly because
+  # the compiler's default same-dir lookup points into src/gpu/ instead.
+  target_include_directories(gpl_lib PRIVATE src)
+  if(Kokkos_ENABLE_CUDA)
+    set_source_files_properties(src/gpu/hpwl.cpp PROPERTIES LANGUAGE CUDA)
+  elseif(Kokkos_ENABLE_HIP)
+    set_source_files_properties(src/gpu/hpwl.cpp PROPERTIES LANGUAGE HIP)
+  endif()
+  # Disable FP contraction for kernels that share gpl_lib's compile
+  # context so they stay bit-stable across compilers. Scoped to gpl_lib
+  # but the CXX flag is also harmless on the existing CPU TUs.
+  target_compile_options(gpl_lib PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=off>
+    $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>
+    $<$<COMPILE_LANGUAGE:HIP>:-ffp-contract=off>
+  )
+  target_link_libraries(gpl_lib Kokkos::kokkos)
+  if(Kokkos_ENABLE_CUDA)
+    # cuda runtime symbols are referenced from the CUDA TU; expose cudart
+    # so that gpl_lib (and the openroad binary) link against libcudart.
+    target_link_libraries(gpl_lib CUDA::cudart)
+  endif()
 else()
   target_sources(gpl_lib PRIVATE src/hpwl.cpp)
 endif()
