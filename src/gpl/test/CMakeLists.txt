@@ -92,4 +92,32 @@ target_sources(mbff_test
   mbff_test.cpp
 )
 
+if(ENABLE_GPU)
+  add_executable(hpwl_gpu_test hpwl_gpu_test.cc)
+  if(Kokkos_ENABLE_CUDA)
+    set_source_files_properties(hpwl_gpu_test.cc PROPERTIES LANGUAGE CUDA)
+  elseif(Kokkos_ENABLE_HIP)
+    set_source_files_properties(hpwl_gpu_test.cc PROPERTIES LANGUAGE HIP)
+  endif()
+  target_include_directories(hpwl_gpu_test PRIVATE
+    ${PROJECT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/src/gpl/src
+  )
+  target_link_libraries(hpwl_gpu_test
+    GTest::gtest
+    GTest::gtest_main
+    gpl_lib
+    Kokkos::kokkos
+  )
+  target_compile_options(hpwl_gpu_test PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=off>
+    $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>
+    $<$<COMPILE_LANGUAGE:HIP>:-ffp-contract=off>
+  )
+  gtest_discover_tests(hpwl_gpu_test
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+  add_dependencies(build_and_test hpwl_gpu_test)
+endif()
+
 add_dependencies(build_and_test fft_test mbff_test)
