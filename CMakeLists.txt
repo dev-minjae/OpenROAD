@@ -48,6 +48,13 @@ option(USE_SYSTEM_ABC "Use system shared ABC library" OFF)
 # Allow disabling tests
 option(ENABLE_TESTS "Enable OpenROAD tests" ON)
 
+# Opt-in GPU acceleration via Kokkos. The actual compute backend (CUDA, HIP,
+# SYCL, or host-only OpenMP/Threads) is determined by the installed Kokkos
+# package; OpenROAD inspects Kokkos_ENABLE_* and turns on the matching CMake
+# language and dependencies automatically. See the per-module CMakeLists for
+# how individual subsystems wire their GPU sources.
+option(ENABLE_GPU "Enable GPU acceleration via Kokkos" OFF)
+
 # Allow enabling address sanitizer
 option(ASAN "Enable Address Sanitizer" OFF)
 
@@ -90,6 +97,94 @@ message(STATUS "OpenROAD version: ${OPENROAD_VERSION}")
 # Default to bulding optimnized/release executable.
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE RELEASE)
+endif()
+
+# GPU backend wiring (opt-in). When ENABLE_GPU=ON we discover the user's
+# Kokkos install, inherit its compute backend, and turn on the matching CMake
+# language so downstream targets can mark kernel sources with
+# set_source_files_properties(... LANGUAGE CUDA|HIP). Per-module CMakeLists
+# (e.g. src/gpl) key off ENABLE_GPU and Kokkos_ENABLE_*; they no longer need
+# to call find_package(Kokkos) or enable_language() themselves.
+if(ENABLE_GPU)
+  find_package(Kokkos REQUIRED)
+  message(STATUS "OpenROAD: GPU acceleration enabled (Kokkos ${Kokkos_VERSION})")
+  if(Kokkos_ENABLE_CUDA)
+    # Auto-discover nvcc when the user has CUDA installed at a standard
+    # location but their environment does not expose it on PATH (common
+    # with IDE-launched configures: the bundled CMake does not inherit
+    # the shell PATH). enable_language(CUDA) below would otherwise abort
+    # with "No CMAKE_CUDA_COMPILER could be found" even though Kokkos's
+    # find_package already located the toolkit.
+    if(NOT DEFINED CMAKE_CUDA_COMPILER AND NOT DEFINED ENV{CUDACXX})
+      find_program(_OPENROAD_NVCC nvcc
+        HINTS ENV CUDA_HOME ENV CUDA_PATH ENV CUDA_ROOT
+              /usr/local/cuda/bin
+              /usr/local/cuda-13.0/bin
+              /usr/local/cuda-12.8/bin /usr/local/cuda-12.0/bin
+              /opt/cuda/bin
+      )
+      if(_OPENROAD_NVCC)
+        set(CMAKE_CUDA_COMPILER "${_OPENROAD_NVCC}" CACHE FILEPATH "")
+        message(STATUS "OpenROAD: auto-discovered nvcc at ${_OPENROAD_NVCC}")
+      endif()
+    endif()
+    # nvcc < 13 cannot parse glibc 2.38+'s _Float128 type that ships with
+    # gcc 13+'s C++ standard library headers (math.h template specialization
+    # for __iseqsig_type<_Float128>). Pin a compatible older g++ as the CUDA
+    # host compiler if one is installed alongside the system gcc; users keep
+    # g++-13 as their default C++ compiler. Override via
+    # -DCMAKE_CUDA_HOST_COMPILER or CUDAHOSTCXX if desired.
+    if(NOT DEFINED CMAKE_CUDA_HOST_COMPILER AND NOT DEFINED ENV{CUDAHOSTCXX}
+       AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+       AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "13.0")
+      foreach(_OPENROAD_GXX_VER 12 11)
+        find_program(_OPENROAD_CUDAHOST g++-${_OPENROAD_GXX_VER}
+          HINTS /usr/bin /usr/local/bin)
+        if(_OPENROAD_CUDAHOST)
+          set(CMAKE_CUDA_HOST_COMPILER "${_OPENROAD_CUDAHOST}" CACHE FILEPATH "")
+          message(STATUS
+            "OpenROAD: pinning CUDA host compiler to ${_OPENROAD_CUDAHOST} "
+            "(nvcc + glibc/gcc 13+ compat)")
+          break()
+        endif()
+        unset(_OPENROAD_CUDAHOST CACHE)
+      endforeach()
+      if(NOT DEFINED CMAKE_CUDA_HOST_COMPILER)
+        message(WARNING
+          "OpenROAD: system gcc is ${CMAKE_CXX_COMPILER_VERSION} and no "
+          "g++-12 / g++-11 was found; nvcc < 13 may fail to parse "
+          "_Float128 in glibc 2.38+ headers. Install a compatible host "
+          "compiler (e.g. apt install g++-12) or set "
+          "-DCMAKE_CUDA_HOST_COMPILER=/path/to/older-g++ explicitly.")
+      endif()
+    endif()
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR "${CMAKE_CUDA_ARCHITECTURES}" STREQUAL "")
+      if(DEFINED Kokkos_CUDA_ARCHITECTURES
+         AND NOT "${Kokkos_CUDA_ARCHITECTURES}" STREQUAL "")
+        set(CMAKE_CUDA_ARCHITECTURES "${Kokkos_CUDA_ARCHITECTURES}")
+      else()
+        # Probe the host GPU at configure time (CMake >= 3.24).
+        set(CMAKE_CUDA_ARCHITECTURES "native")
+      endif()
+    endif()
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    message(STATUS "OpenROAD: CUDA backend (arch=${CMAKE_CUDA_ARCHITECTURES})")
+    # nvcc 12.8 cannot parse fmt 11's nontype-template-parameter user-defined
+    # literals (fmt/bundled/format.h: operator""_a with fixed_string). The
+    # legacy literal fallback is still available; opt into it for CUDA TUs
+    # only. Project-wide CXX compilation is unaffected.
+    add_compile_definitions(
+      $<$<COMPILE_LANGUAGE:CUDA>:FMT_USE_NONTYPE_TEMPLATE_ARGS=0>)
+  elseif(Kokkos_ENABLE_HIP)
+    enable_language(HIP)
+    message(STATUS "OpenROAD: HIP backend")
+  elseif(Kokkos_ENABLE_SYCL)
+    message(STATUS "OpenROAD: SYCL backend (driven by Kokkos host compiler)")
+  else()
+    message(STATUS
+            "OpenROAD: host-only Kokkos backend (Serial / OpenMP / Threads)")
+  endif()
 endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")

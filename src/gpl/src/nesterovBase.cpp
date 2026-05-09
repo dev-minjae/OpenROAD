@@ -345,6 +345,14 @@ void GNet::updateBox()
   }
 }
 
+void GNet::setBox(int lx, int ly, int ux, int uy)
+{
+  lx_ = lx;
+  ly_ = ly;
+  ux_ = ux;
+  uy_ = uy;
+}
+
 int64_t GNet::getHpwl() const
 {
   if (ux_ < lx_) {  // dangling net

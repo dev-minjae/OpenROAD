@@ -259,6 +259,10 @@ class GNet
   void addGPin(GPin* gPin);
   void clearGPins() { gPins_.clear(); }
   void updateBox();
+  // GPU path writes computed bbox back through this setter so that
+  // subsequent gNet->lx() / ly() / ux() / uy() callers stay consistent
+  // with the CPU updateBox() loop.
+  void setBox(int lx, int ly, int ux, int uy);
   int64_t getHpwl() const;
 
   void setDontCare();

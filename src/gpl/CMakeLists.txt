@@ -31,7 +31,6 @@ add_library(gpl_lib
   src/nesterovPlace.cpp
   src/placerBase.cpp
   src/nesterovBase.cpp
-  src/hpwl.cpp
   src/fft.cpp
   src/fftsg.cpp
   src/fftsg2d.cpp
@@ -41,6 +40,17 @@ add_library(gpl_lib
   src/solver.cpp
   src/mbff.cpp
 )
+
+# --- HPWL backend selection (link-time dispatch) ---
+# Exactly one translation unit defines NesterovBaseCommon::getHpwl(): either
+# the OpenMP loop in src/hpwl.cpp (default) or the Kokkos kernel pulled in
+# from the src/gpu/ subdirectory when ENABLE_GPU=ON. CMake enforces ODR;
+# the consumer-facing headers and sources stay free of preprocessor branches.
+if(ENABLE_GPU)
+  add_subdirectory(src/gpu)
+else()
+  target_sources(gpl_lib PRIVATE src/hpwl.cpp)
+endif()
 
 target_sources(gpl
   PRIVATE
