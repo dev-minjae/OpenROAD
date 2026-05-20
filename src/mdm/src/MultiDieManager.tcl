@@ -202,9 +202,12 @@ proc run_flattened_placement { args } {
     keys {-density -target_density -nesterov_max_iter} \
     flags {-no_skip_io_mode}
 
-  # paper §IV.A Theorem 1: doubling bin density threshold ≈ target_density 2.0
+  # paper §IV.A Theorem 1: doubling bin density threshold via doubled die
+  # area (geometric, in MultiDieManager::runFlattenedPlacement). target
+  # density itself stays at standard 0.8 — Nesterov should pack cells to
+  # ~80% bin density, not 200%.
   set density 1.0
-  set target_density 2.0
+  set target_density 0.8
   set nesterov_max_iter 5000
   set skip_io_mode 1
   if { [info exists keys(-density)] } {

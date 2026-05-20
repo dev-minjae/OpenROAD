@@ -2,7 +2,7 @@
 set_iccad_scale -scale 2000
 read_iccad2022 -case /home/minjae/workspace/etc/openroad/archive/3d_ic/benchmarks/iccad2022/case3.txt
 
-run_flattened_placement
+run_flattened_placement -nesterov_max_iter 1000
 puts "=== HPWL after flattened placement ==="
 get_3d_hpwl
 

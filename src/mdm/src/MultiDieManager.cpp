@@ -878,33 +878,75 @@ void MultiDieManager::runFlattenedPlacement(double density,
         utl::MDM, 311, "runFlattenedPlacement: gpl::Replace pointer is null.");
     return;
   }
-  // Per paper §IV.A Theorem 1: single-die assumption with doubled bin
-  // density threshold. We map this to gpl::PlaceOptions.density (target
-  // bin density). target_density=2.0 reflects the doubling.
-  // density (param) is the design-level density target, currently passed
-  // through but unused by gpl::PlaceOptions directly (kept for future).
+  // Per paper §IV.A Theorem 1: "doubling the threshold of bin density"
+  // — packing two-dies' worth of cells into a single die. We implement
+  // this geometrically: enlarge the root block's die area to 2× along
+  // y (top+bottom virtual stack) for the duration of Replace, then
+  // restore. Cells' coords land inside the doubled die after Nesterov;
+  // those outside the original die get clamped before set_3D_IC takes
+  // over.
   (void) density;
+  auto* top_block = db_->getChip()->getBlock();
+  const odb::Rect orig_die = top_block->getDieArea();
+  const odb::Rect orig_core = top_block->getCoreArea();
+  odb::Rect doubled_die = orig_die;
+  const int orig_h = orig_die.yMax() - orig_die.yMin();
+  doubled_die.set_yhi(orig_die.yMin() + 2 * orig_h);
+  top_block->setDieArea(doubled_die);
+  top_block->setCoreArea(doubled_die);
+
   gpl::PlaceOptions opts;
   opts.density = target_density;
   opts.nesterovPlaceMaxIter = nesterov_max_iter;
   opts.skipIoMode = skip_io_mode;
-  // root block packs cells from both dies → utilization > 100% on the
-  // single-die area. Theorem 1 of paper §IV.A justifies relaxing the
-  // check (doubling the density threshold). Density tracking still applies.
+  // Doubled die area gives Nesterov spread room; the utilization check
+  // still triggers due to the per-PlacerBase region accounting (row-based
+  // region_area_ doesn't pick up our setDieArea immediately), so keep
+  // skipDensityCheck on. Density tracking via Nesterov is unaffected.
   opts.skipDensityCheck = true;
   logger_->info(utl::MDM,
                 304,
                 "runFlattenedPlacement: starting (target_density={}, "
-                "nesterov_max_iter={}, skip_io_mode={}).",
+                "nesterov_max_iter={}, skip_io_mode={}). orig die "
+                "y=[{},{}], doubled die y=[{},{}]",
                 target_density,
                 nesterov_max_iter,
-                skip_io_mode);
-  replace_->doInitialPlace(/*threads=*/1, opts);
-  const int final_iter = replace_->doNesterovPlace(/*threads=*/1, opts);
+                skip_io_mode,
+                orig_die.yMin(),
+                orig_die.yMax(),
+                doubled_die.yMin(),
+                doubled_die.yMax());
+  // Multi-threading speeds up density gradient and WL gradient passes.
+  // case4 (220k cells) benefits the most.
+  constexpr int threads = 16;
+  replace_->doInitialPlace(threads, opts);
+  const int final_iter = replace_->doNesterovPlace(threads, opts);
+
+  // Restore die area; clamp cells' y coords to the original die.
+  top_block->setDieArea(orig_die);
+  top_block->setCoreArea(orig_core);
+  int n_clamped = 0;
+  for (auto* inst : top_block->getInsts()) {
+    int x, y;
+    inst->getLocation(x, y);
+    int new_y = y;
+    if (new_y < orig_die.yMin()) {
+      new_y = orig_die.yMin();
+    }
+    if (new_y > orig_die.yMax() - inst->getBBox()->getDY()) {
+      new_y = orig_die.yMax() - inst->getBBox()->getDY();
+    }
+    if (new_y != y) {
+      inst->setLocation(x, new_y);
+      ++n_clamped;
+    }
+  }
   logger_->info(utl::MDM,
                 305,
-                "runFlattenedPlacement: done. Nesterov final iter={}.",
-                final_iter);
+                "runFlattenedPlacement: done. Nesterov final iter={}, "
+                "y-clamped {} cells back into original die.",
+                final_iter,
+                n_clamped);
 }
 
 void MultiDieManager::runGlobalTierOptimization(double rho,

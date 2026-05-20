@@ -1,153 +1,166 @@
-# Handoff — Divide-and-Conquer Baseline 록인 완료, 다음은 Phase 4.4 Flattened Init
+# Handoff — Phase 4.4 Flattened Placement, row-doubling 직전 stop
 
 ## 1. 작업 목표
 
-`docs/superpowers/plans/2026-05-07-divide-and-conquer-baseline.md` 의 plan 실행. paper-equivalent frontend (Xueyan post-GP 데이터) + 우리 backend 로 baseline 갈아엎기. paper Table I "Ours" 컬럼과 직접 비교 가능한 numerical lock 확보.
+paper iPL-3D §IV.A "Flattened Placement" 자체 구현. paper coord (Xueyan reference) 빌리는 의존성 제거. Plan: `docs/superpowers/plans/2026-05-07-phase4-flattened-placement.md`.
+
+목표 metric: case3 self-frontend HPWL ≈ paper Ours 30,234,112. (case3 만 paper 따라잡으면 case4 진행 — 사용자 결정).
 
 ## 2. 현재 진행 상황
 
-**완료 (이번 세션, 2 commits 예정).**
+**Phase 4.4 의 ~70% 진척, 알고리즘 quality issue 남음**.
 
-### 검증 상태 — 3 케이스 모두 paper Ours ±1% 안
+### 완료 (이번 세션, 4 commits)
+1. `78175fb5b4` plan 문서 작성
+2. `636a3a2748` Tcl/SWIG/header interface 부활 (stub)
+3. `8054a28b1a` `runFlattenedPlacement` 실제 구현 (gpl::Replace wrapper) + `gpl::PlaceOptions::skipDensityCheck` flag 신규
+4. `5e77bada39` case2/3/4 self-frontend regression scripts
 
-| Case | 우리 baseline | paper Ours | gap | path |
-|---|---|---|---|---|
-| case2 | **2,004,424** | 1,992,499 | **+0.6%** | W1 +Planar |
-| case3 | **30,229,424** | 30,234,112 | **-0.02%** | W1 Skip |
-| case4 | **265,734,241** | 267,381,744 | **-0.6%** | W1 Skip |
+### 미커밋 (이번 세션 미완 작업)
+- `src/mdm/src/MultiDieManager.cpp` — `runFlattenedPlacement` 에 die area doubling RAII + multi-threading 16 + y-clamp 추가
+- `src/mdm/src/MultiDieManager.tcl` — target_density default 0.8 (이전 2.0 잘못된 해석)
+- `src/gpl/src/placerBase.cpp` — debug log GPL-0200 (PlacerBaseCommon::init 의 die_rect 추적용; **commit 전 제거 필요**)
+- `src/mdm/test/regression_phase4_self_case3.tcl` — `-nesterov_max_iter 1000` 추가
 
-3 케이스 평균 격차: **paper -0.01% (사실상 동률, case3/case4 미세 추월)**.
+### case3 e2e 결과 (현재 state)
+- runFlattenedPlacement 동작 ✅ (exit 0, ~22 분 with multi-threading 16 thread)
+- e2e: 71,582,057
+- paper Ours: 30,234,112
+- **격차 +137%** ❌
+
+### 진단 결과 (이번 세션, log 추적)
+- `setDieArea(doubled)` + `setCoreArea(doubled)` **정상 동작** — `getDieArea()` 직후 doubled 반환
+- `gpl::PlacerBaseCommon::init` 의 die_rect 도 doubled 인식 (GPL-0012 Die BBox = doubled 영역)
+- region_area 도 doubled (GPL-0015 = 738M um² ≈ 2 × single die)
+- 그런데 **utilization 174%** — cells area 가 region 의 1.74배. **cells 가 doubled 영역 안 spread 못 함**.
+- 가설: **row 가 single die 영역만 cover** (TestCaseManager 가 row 만든 후 우리는 die area 만 변경, row 변경 안 함). doInitialPlace 가 row 위에 cells 배치 → cells 가 single die 영역 안에 cramped → Nesterov 가 그 위에서 작동 → spread 못 함
 
 ### Branch / HEAD
 - Branch: `feature/mdm/global-tier-opt`
-- HEAD: `21c50a4a8e` (이전 cycle, case3 e2e baseline lock — skip Planar)
-- 이번 cycle 후 master+48 commits ahead (이전 47 + 이번 1)
-
-### 검증 명령
-```bash
-bash src/mdm/test/regression_check.sh case2  # ~5분, PASS, HPWL 2,004,424
-bash src/mdm/test/regression_check.sh case3  # ~3분, PASS, HPWL 30,229,424
-bash src/mdm/test/regression_check.sh case4  # ~10분, PASS, HPWL 265,734,241
-```
+- HEAD: `5e77bada39 test(mdm): Phase 4.4 self-frontend regression scripts (case2/3/4)`
+- master+58 commits ahead of master
 
 ## 3. 변경된 파일
 
-### 수정/덮어쓰기
-- `src/mdm/test/regression_phase4_case2.tcl` — 새 path: Xueyan post-GP load + Planar (1 iter) + SemiLeg
-- `src/mdm/test/regression_phase4_case3.tcl` — 새 path: Xueyan post-GP load + Skip Planar + SemiLeg
-- `src/mdm/test/regression_check.sh` — case4 baseline 추가, baseline 매핑 새 수치로 갱신, header docstring 보강
+### 새 commit 들 (이미 commit, branch 에 반영)
+- `docs/superpowers/plans/2026-05-07-phase4-flattened-placement.md` — plan (608 줄)
+- `src/mdm/include/mdm/MultiDieManager.h` — `runFlattenedPlacement` declaration
+- `src/mdm/src/MultiDieManager.cpp` — `runFlattenedPlacement` (이번 세션 후반부에 미커밋 추가 변경 더 있음)
+- `src/mdm/src/MultiDieManager.tcl` — Tcl proc `run_flattened_placement`
+- `src/mdm/src/MultiDieManager.i` — SWIG `run_flattened_placement` binding
+- `src/gpl/include/gpl/Replace.h` — `gpl::PlaceOptions::skipDensityCheck` 멤버 추가
+- `src/gpl/src/replace.cpp` — `doInitialPlace` / `doNesterovPlace` 의 8 PlacerBase 생성에서 `!options.skipDensityCheck` 사용
+- `src/mdm/test/regression_phase4_self_{case2,case3,case4}.tcl` — self-frontend 측정 scripts
 
-### 신규
-- `src/mdm/test/regression_phase4_case4.tcl` — case4 numerical lock 신규
-- `docs/agents/phase4-divide-and-conquer.md` — 격차 분석, step 별 wirelength, W1/W2 구분, 다음 leverage points
-- `docs/superpowers/plans/2026-05-07-divide-and-conquer-baseline.md` — 이번 cycle plan (writing-plans skill 산출물)
+### 미커밋 변경 (commit 전에 정리 필요)
+- `src/mdm/src/MultiDieManager.cpp:[runFlattenedPlacement]`:
+  - die area doubling RAII (y direction × 2): orig save → setDieArea/setCoreArea(doubled) → restore
+  - debug log MDM-0301 (commit 전 제거 추천)
+  - multi-threading: `replace_->doInitialPlace(/*threads=*/16, opts)` + `doNesterovPlace(threads, ...)`
+  - y-clamp loop: doubled 영역 spread 한 cells 를 original die 영역으로 fold
+  - `opts.skipDensityCheck = true` (region_area 가 doubled 인식하긴 하는데 utilization check 가 cells/region 비교 → 174% > 100%, 우회 필요)
+- `src/mdm/src/MultiDieManager.tcl`:
+  - `target_density` default 2.0 → **0.8** (paper 의 doubling 은 *die area* 두 배지 target_density 두 배 아님)
+- `src/gpl/src/placerBase.cpp:[PlacerBaseCommon::init]`:
+  - debug log GPL-0200 추가 (commit 전 제거 필수 — gpl src 변경은 최소화)
+- `src/mdm/test/regression_phase4_self_case3.tcl`:
+  - `run_flattened_placement -nesterov_max_iter 1000` (default 5000 너무 김)
 
-### 미커밋
+### untracked (이번 세션 변경 없음)
 - `paper.pdf` (gitignored)
 - `.claude/scheduled_tasks.lock` (시스템)
-- `docs/agents/openroad-gpu-contribution-notes.md` (이전 cycle untracked, 이번 cycle 변경 없음)
+- `docs/agents/openroad-gpu-contribution-notes.md` (이전 세션, 변동 없음)
 
-## 4. 남은 작업 (다음 cycle 후보)
+## 4. 남은 작업
 
-진단 결과 (`docs/agents/phase4-gto-output-diagnosis.md`) 반영. 우선순위 업데이트.
+### 즉시 (다음 세션 시작 첫 작업)
 
-### 1순위 — GTO output cluster 분포 paper 화
+**우선순위 1: row doubling 구현 (직접 가설 검증)**
 
-진단 결과: 모든 case 에서 우리 GTO 출력의 die cluster peak/avg 가 paper 보다 38-71% 더 큼 (cells cluster 더 심함). entropy 도 항상 lower (less uniform). 이 cluster 가 SemiLeg 의 +84.6% overhead (case3) 의 핵심 원인 후보.
+current cycle stop 위치 — `runFlattenedPlacement` 안에서 die area 만 doubled, row 는 그대로. cells 가 row 위에만 placed → spread 못 함. 해결 plan:
 
-해법 후보:
-- **archive reference_impl 와 line-by-line diff** — `/home/minjae/workspace/etc/openroad/archive/3d_ic/reference_impl/mdm/src/` 와 우리 `src/mdm/src/GlobalTierOptimizer.cpp` 비교. b_factor / alpha / beta / gamma defaults, knapsack scoring criteria 차이 발견
-- **multi-bin overflow** (Phase 4.2 잔여) — 현재 single-bin per die. paper §IV.B-3 의 region grid 도입하면 cluster 분포 균일화
-- **GTO migration 시 displacement penalty** 추가
+옵션 A: TestCaseManager::rowConstruction 에서 doubled row 만들기 (invasive, all flow 영향)
+옵션 B: `runFlattenedPlacement` 안에서 임시 row 추가 — doubled 영역 cover 하도록 dbRow 생성, 끝나면 삭제 (RAII). ~50 줄 작업
+옵션 C: archive `reference_impl/mdm/src/` 비교해서 paper 의 row 처리 방식 확인 후 결정
 
-### 2순위 — Partition disagreement 22-34% 줄이기
+추천: **옵션 B 먼저 시도** (~1-2 시간). 안 되면 archive 비교 (옵션 C).
 
-진단 결과: 우리 ↔ paper 의 die 배정 disagreement 가 case2 26%, case3 34%, case4 22%. 약 1/4~1/3 cells 가 잘못된 die 로 가서 SemiLeg 가 push around.
+**우선순위 2: debug log 정리 + commit**
 
-1순위와 같은 분석 (archive reference_impl diff) 으로 해결 가능. 1순위와 묶어서 처리 가능성.
+- `placerBase.cpp` 의 GPL-0200 debug log 제거 (gpl 코드 변경 최소화 원칙)
+- `MultiDieManager.cpp` 의 MDM-0301 debug log 제거
+- 미커밋 파일들 commit (Phase 4.4 v0.1: runFlattenedPlacement 동작, quality 격차 +137% 알려진 상태)
 
-### 3순위 — Planar Correcting 의 row 보존 (case2 만 영향)
+### 다음 cycle (paper case3 따라잡기)
+- row doubling 후 case3 e2e 재측정. 만약 quality 좋아지면 다음 cycle 의 case3 baseline lock
+- paper 따라잡기 (격차 ±5%) 까지 더 필요한 fix:
+  - `runFlattenedPlacement` 의 Nesterov knob 미세 조정 (target_density, max_iter)
+  - paper 의 GTO output (§IV.B) 호환성
+  - paper 의 Multi-Tier Placement (§IV.F) 신규 구현
 
-case2 (sparse) 에서 Planar 가 row 정렬 79.9% → 16.7% 로 깨뜨림. dense case3/4 는 처음부터 row-aligned 아니라 무관. case2 만 한정된 leverage.
+### 보류
+- case4 — paper 가 Diff_tech (paper Table II) 라 paper 자체가 다른 알고리즘. case3 paper 따라잡은 후 진행
+- archive `reference_impl/mdm/src/` 와 우리 GTO 코드 line-by-line diff — 별도 cycle. row doubling 작업 후 진행
 
-해법: Planar Correcting 후 `snapCellsToRows` 자동 호출, 또는 Planar Nesterov cost function 에 row-snap term 추가.
-
-### 4순위 (이전 1순위에서 강등) — Phase 4.4 Flattened Init wrapper
-
-진단으로 보면 frontend (flat 2D GP) 가 본질적 leverage point 아님. paper coord 받아서도 우리 GTO + Planar 가 cluster + row 깨뜨림 → 진짜 leverage 는 GTO/Planar 알고리즘 자체. Phase 4.4 는 외부 데이터 의존성 제거의 가치 (별도 motivation) 는 있지만 paper 추월의 직접 leverage 아님.
-
-### 보류 — Phase 4.6 Bilevel Coordinator
-
-paper Table IV ablation 는 alternating 없이도 case3 30.33M 나옴. 우리 baseline 이 이미 paper-class 이라 Bilevel 의 marginal value 작음.
-
-### 보류 — Phase 4.7 Cross-die move, Phase 4.8 from-scratch bench
-
-이전 handoff 그대로. 별도 cycle.
+### GPU 가속 (별도 path)
+사용자가 이번 세션에서 RTX 5090 활용 가속 의문 제기. 결정: (c) **알고리즘 fix + multi-threading 우선, GPU 는 나중**. 이번 cycle 에 multi-threading (threads=16) 적용 — 단일 thread 대비 5-6× 가속 (case3 5-6 시간 → 22 분). GPU porting 은 paper draft 후 PR #5352 unblock 합류 path 로.
 
 ## 5. 주요 결정사항
 
 | 결정 | 이유 |
 |---|---|
-| baseline 을 W1 (paper coord + paper partition + 우리 backend) 으로 통일 | paper Table I 와 직접 비교 가능, paper-equivalent starting state. 격차 ±1% 안. |
-| case3, case4 에서 Skip Planar / case2 에서 +Planar | empirically per-case 측정 winner. case3/4 는 Skip 이 -0.5%/-0.4% 좋음, case2 는 +Planar 가 -0.13% 좋음. |
-| W2 (raw coord) path 는 보류 | 우리 flat 2D GP 미구현. Phase 4.4 의 명확한 motivation 됨. |
-| Phase 4.6 Bilevel 우선순위 강등 | paper ablation 결과 + 우리 baseline 이 이미 paper-class. |
-| C++ 코드 변경 없음 (이번 cycle) | 모든 변경 Tcl/script 수준. 기존 API 그대로. |
-| `runFlattenedPlacement` 부활 결정은 다음 cycle 로 미룸 | 이번 cycle scope = baseline 록인. Phase 4.4 는 별도 plan 필요 (writing-plans). |
+| paper §IV.A 의 "doubling threshold" 를 *die area 두 배 (geometric)* 로 해석 | 사용자 지적 — `target_density 2.0` 은 잘못된 해석 (정상 GP target 0.7-0.8). paper 의 doubling 은 면적 doubling (= cells 합 area / die area ≤ 100% 만족시키기 위함) |
+| `gpl::PlaceOptions::skipDensityCheck` flag 신규 (gpl 코드 수정) | PlacerBase 의 utilization > 100% 절대 한계 우회. CLAUDE.md 의 src/sta 금지는 src/gpl 과 무관 |
+| multi-threading threads=16 | case4 (220k cells) 의 5000 iter Nesterov 가 단일 thread 면 ~수시간. 16 thread 로 case3 22분. 향후 모든 실험 빨라짐. GPU 가속 (며칠~몇주 작업) 보다 즉시 효과 |
+| target_density default 0.8 (이전 2.0 잘못) | 사용자 지적. 보통 GP target 0.7-0.8. doubling 은 die area 차원 |
+| die area doubling 가 실제 effective 인지 debug 로 확인 | 디버그 진행하다가 PlacerBase 가 doubled 인식 함을 발견. 이전 추측 (region_area 미인식) 틀림 — 실제 issue 는 row 가 single die 영역만 cover |
+| case4 보류, case3 만 우선 | 사용자 결정. case4 는 paper 자체 다른 알고리즘 path. case3 quality 잡힌 후 case4 |
 
 ## 6. 주의사항 / 알려진 이슈
 
-### CLAUDE.md 규칙 (이번 cycle 준수 확인)
-- `clang-format` 변경 없음 (C++ 수정 안 함)
-- `git commit -s` 필수 (DCO)
-- `src/sta/` 수정 안 함
+### CLAUDE.md 규칙 (이번 cycle 위반 X)
+- `src/sta/` 수정 안 함 ✓
+- clang-format: `*.i` 파일에 사용 안 함 (manual edit only) ✓
+- DCO: `git commit -s` ✓ (모든 commits)
+- `src/gpl/` 수정 OK (CLAUDE.md 의 sta 금지와 무관)
 
-### Tcl flow 차이 (이전 baseline → 이번 baseline)
-이전:
-```tcl
-read_iccad2022 -case <case>.txt
-parse_iccad2022_output -file <xueyan>.out
-exec awk "{print \$1, 0}" <xueyan>.par > /tmp/flat_<case>.par   # FORCE flat
-set_mdm_partition_file -file /tmp/flat_<case>.par
-set_3D_IC -die_number 2
-run_global_tier_optimization -apply        # 우리 Algorithm 2 (now bypassed)
-[run_planar_correcting -iterations 1]      # 옵션
-run_semi_legalizer
+### gpl 코드 변경의 위험
+이번 cycle 의 `gpl::PlaceOptions::skipDensityCheck` 추가는 OpenROAD 본체 흐름에 영향 *미미* (default false 이라 기존 흐름 변경 X). 단 다음 cycle 작업 후 PR 시 OpenROAD 원작자에게 review 받을 가치 있음 (gpl 의 utilization check 우회 필요성 설명).
+
+### Phase 4.4 v0.1 의 한계 (다음 세션 인지 필요)
+1. **case3 final HPWL 71.6M = paper +137%** — paper 추월 못 함 (그러나 self-frontend 자체는 작동)
+2. **utilization 174% with skipDensityCheck=true** — gpl 의 정상 사용 패턴 *아님*. paper 알고리즘 의도와 일치하지만 OpenROAD 스타일과 차이
+3. **y-clamp 가 cells 좌표 강제 fold** — 3869 cells (case3) y 좌표를 doubled 영역에서 single 영역으로 강제 옮김. 이게 wirelength 격차의 직접 원인 가능성
+
+### 검증 명령
+```bash
+cd /home/minjae/workspace/etc/openroad/OpenROAD
+# 이전 cycle baseline (Xueyan-borrowed) — 여전히 작동
+bash src/mdm/test/regression_check.sh case2     # PASS, HPWL 2,004,424
+bash src/mdm/test/regression_check.sh case3     # PASS, HPWL 30,229,424
+bash src/mdm/test/regression_check.sh case4     # PASS, HPWL 265,734,241
+
+# 이번 cycle self-frontend (case3 만 의미)
+build/bin/openroad -no_init -no_splash -exit \
+    src/mdm/test/regression_phase4_self_case3.tcl > /tmp/sc3.log 2>&1
+# 기대: 71.6M evaluator HPWL (paper +137%, 알려진 한계)
 ```
 
-이번:
-```tcl
-read_iccad2022 -case <case>.txt
-parse_iccad2022_output -file <xueyan>.out
-set_mdm_partition_file -file <xueyan>.par   # paper partition direct (NO flatten)
-set_3D_IC -die_number 2                      # paper-equivalent state
-[run_planar_correcting -iterations 1]        # case2 만
-run_semi_legalizer
-```
-
-차이점:
-- partition 을 flatten 안 함 → cells 가 paper partition 으로 die 분리됨
-- `run_global_tier_optimization` 호출 제거 → 우리 GTO 가 partition 다시 결정 안 함 (paper partition 그대로 사용)
-- coord 도 paper post-GP 그대로
-
-### case3 의 Planar Correcting 행동 변화
-- 이전 cycle: Skip 이 winner 이유 = 우리 GTO 출력에서 시작하면 Planar 가 발산
-- 이번 cycle: paper coord 에서 시작하면 Planar 정상 작동 (case3 W1 +Planar 30.39M, 발산 없음)
-- 즉 **Planar Correcting 알고리즘 자체는 OK. 우리 GTO 출력이 Planar 와 호환되지 않음** — 진짜 leverage point 후보 (별도 cycle 에서 GTO 출력 quality 검증)
+### 진행 시간 기록 (참고용)
+- cycle 시작: 2026-05-07 ~22:23 KST
+- 진행 중간 stop: 2026-05-08 ~01:58 KST
+- 총 진행: ~3.5 시간 (case3 e2e 22분 포함)
 
 ### 외부 reference 파일 (변동 없음)
 - ICCAD 2022 evaluator: `/home/minjae/workspace/etc/openroad/archive/3d_ic/tools/evaluator_0525`
-- Case files: `/home/minjae/workspace/etc/openroad/archive/3d_ic/benchmarks/iccad2022/case{2,3,4}.txt`
-- Xueyan reference: `/tmp/case2_ipl.out{,.par}`, `/tmp/ref_gp/case{3,4}_gp.txt{,.par}`
-- iPL-3D paper: `paper.pdf` (gitignored)
-
-### Raw experiment logs
-- W1 paths: `/tmp/case{2,3,4}_W1_run.log`, `/tmp/case{2,3,4}_W1_skip_run.log`
-- W2 fail demos: `/tmp/case{2,3,4}_W2_run.log` ("Movable instances: 0" 패턴)
-- 자세한 분석: `docs/agents/phase4-divide-and-conquer.md`
+- Cases: `/home/minjae/workspace/etc/openroad/archive/3d_ic/benchmarks/iccad2022/case{2,3,4}.txt`
+- Xueyan post-GP: `/tmp/case2_ipl.out{,.par}`, `/tmp/ref_gp/case{3,4}_gp.txt{,.par}`
+- iPL-3D paper: `paper.pdf` (gitignored, 9 페이지)
+- archive paper reference impl: `/home/minjae/workspace/etc/openroad/archive/3d_ic/reference_impl/mdm/src/` (다음 cycle 비교 가치)
 
 ### 다음 세션 첫 단계 권고
 1. 이 파일 (`handoff.md`) 읽기
-2. `bash src/mdm/test/regression_check.sh case2 && bash src/mdm/test/regression_check.sh case3 && bash src/mdm/test/regression_check.sh case4` 실행해서 환경 sanity (3 케이스 모두 0% drift)
-3. Phase 4.4 Flattened Init wrapper 의 plan 작성 (writing-plans skill). gpl::Replace::doNesterovPlace 단일-block 호출 + Tcl wrapper. 이전 cycle 에서 삭제된 stub 의 정상 구현.
-4. 또는 paper "+X%" 수치 확정 (이미 분석 됨, `docs/agents/phase4-divide-and-conquer.md` §8 참고)
+2. `git status` 로 미커밋 변경 확인 — placerBase.cpp 의 debug log 정리, 그 외 변경 commit 결정
+3. `bash src/mdm/test/regression_check.sh case3` 로 환경 sanity (이전 baseline 30.23M)
+4. row doubling 시도 (옵션 B) — `runFlattenedPlacement` 안에서 임시 dbRow 추가
+5. case3 e2e 재측정 후 quality 비교
