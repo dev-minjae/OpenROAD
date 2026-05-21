@@ -13,6 +13,7 @@
 #include "gpuBackend.h"
 
 #include <Kokkos_Core.hpp>
+#include <cctype>
 #include <cstdlib>
 #include <mutex>
 #include <string>
