@@ -58,13 +58,18 @@ if(ENABLE_GPU)
   # under src/gpu/ need that on the include path explicitly because
   # the compiler's default same-dir lookup points into src/gpu/ instead.
   target_include_directories(gpl_lib PRIVATE src)
-  # gpu/hpwl.cpp is the device kernel TU and needs CUDA/HIP-language
-  # compilation. gpu/gpuBackend.cpp is plain C++ (getenv + Kokkos lifecycle
-  # only, no device code) and is left as a CXX TU on purpose.
+  # gpu/hpwl.cpp is the device kernel TU. gpu/gpuBackend.cpp carries no device
+  # code itself, but it includes <Kokkos_Core.hpp> for the lazy Kokkos
+  # initialize()/finalize(): when Kokkos is built with the CUDA (or HIP)
+  # backend, that header bakes KOKKOS_ENABLE_CUDA into its config and refuses
+  # to compile under a plain host compiler (it requires __CUDACC__). So both
+  # TUs are flagged with the device language to match the Kokkos backend.
   if(Kokkos_ENABLE_CUDA)
-    set_source_files_properties(src/gpu/hpwl.cpp PROPERTIES LANGUAGE CUDA)
+    set_source_files_properties(src/gpu/hpwl.cpp src/gpu/gpuBackend.cpp
+                                PROPERTIES LANGUAGE CUDA)
   elseif(Kokkos_ENABLE_HIP)
-    set_source_files_properties(src/gpu/hpwl.cpp PROPERTIES LANGUAGE HIP)
+    set_source_files_properties(src/gpu/hpwl.cpp src/gpu/gpuBackend.cpp
+                                PROPERTIES LANGUAGE HIP)
   endif()
   # Disable FP contraction for kernels that share gpl_lib's compile
   # context so they stay bit-stable across compilers. Scoped to gpl_lib

@@ -3,9 +3,12 @@
 
 // Shared GPU-backend helpers for the gpl GPU kernel series.
 //
-// Compiled only when ENABLE_GPU=ON. This is plain C++ (no device code): it
-// only calls getenv and the Kokkos lifecycle API, so it does NOT need
-// CUDA/HIP-language compilation.
+// Compiled only when ENABLE_GPU=ON. This TU has no device code of its own —
+// it only calls getenv and the Kokkos lifecycle API — but it includes
+// <Kokkos_Core.hpp>, which (when Kokkos was built with the CUDA/HIP backend)
+// bakes KOKKOS_ENABLE_CUDA into its config and requires __CUDACC__. CMake
+// therefore flags this file with the device language to match the backend;
+// see src/gpl/CMakeLists.txt.
 
 #include "gpuBackend.h"
 
