@@ -3,9 +3,11 @@
 
 // HPWL (half-perimeter wirelength) Kokkos backend.
 //
-// Compiled and linked only when ENABLE_GPU=ON; the OpenMP equivalent in
-// ../hpwl.cpp is linked otherwise. Exactly one translation unit defines
-// NesterovBaseCommon::getHpwl() per build (CMake-enforced ODR).
+// Compiled only when ENABLE_GPU=ON. This translation unit exposes the GPU
+// kernel as the free function gpl::getHpwlGpu(); the CPU dispatch site in
+// ../hpwl.cpp calls it at runtime when gpl::gpuEnabled() is true. Both the
+// CPU and GPU paths coexist in an ENABLE_GPU build — selection is a runtime
+// choice, not a link-time one.
 //
 // Determinism: integer arithmetic; bit-exact across Kokkos backends
 // (Serial / OpenMP / Threads / CUDA) and against the OpenMP CPU loop.
@@ -13,44 +15,17 @@
 #include <Kokkos_Core.hpp>
 #include <climits>
 #include <cstdint>
-#include <cstdlib>
-#include <mutex>
 #include <vector>
 
+#include "gpuBackend.h"
+#include "hpwlGpu.h"
 #include "nesterovBase.h"
 
 namespace gpl {
 
-// Lazy Kokkos lifecycle owned by gpl_lib so that the host application
-// (the openroad binary, regression drivers, etc.) does not need to know
-// Kokkos exists. The first GPU HPWL call initializes Kokkos and registers
-// an atexit handler that finalizes it once at process shutdown — this is
-// the upstream-safe pattern for opt-in CUDA backends without disrupting
-// OpenROAD's existing main(). std::call_once keeps the initialization
-// safe if a future caller drops the master-thread invariant.
-namespace {
-void ensureKokkosInitialized()
+int64_t getHpwlGpu(std::vector<GNet>& gNetStor)
 {
-  static std::once_flag once;
-  std::call_once(once, [] {
-    if (Kokkos::is_initialized()) {
-      return;
-    }
-    Kokkos::InitializationSettings settings;
-    settings.set_disable_warnings(true);
-    Kokkos::initialize(settings);
-    std::atexit([] {
-      if (Kokkos::is_initialized() && !Kokkos::is_finalized()) {
-        Kokkos::finalize();
-      }
-    });
-  });
-}
-}  // namespace
-
-int64_t NesterovBaseCommon::getHpwl()
-{
-  const int n_nets = static_cast<int>(gNetStor_.size());
+  const int n_nets = static_cast<int>(gNetStor.size());
   if (n_nets == 0) {
     return 0;
   }
@@ -61,7 +36,7 @@ int64_t NesterovBaseCommon::getHpwl()
   std::vector<int> h_net_off(n_nets + 1, 0);
   for (int i = 0; i < n_nets; ++i) {
     h_net_off[i + 1]
-        = h_net_off[i] + static_cast<int>(gNetStor_[i].getGPins().size());
+        = h_net_off[i] + static_cast<int>(gNetStor[i].getGPins().size());
   }
   const int total_pins = h_net_off[n_nets];
 
@@ -69,7 +44,7 @@ int64_t NesterovBaseCommon::getHpwl()
   std::vector<int> h_pin_cy(total_pins);
   for (int i = 0; i < n_nets; ++i) {
     int off = h_net_off[i];
-    for (auto* gPin : gNetStor_[i].getGPins()) {
+    for (auto* gPin : gNetStor[i].getGPins()) {
       h_pin_cx[off] = gPin->cx();
       h_pin_cy[off] = gPin->cy();
       ++off;
@@ -166,7 +141,7 @@ int64_t NesterovBaseCommon::getHpwl()
   Kokkos::deep_copy(h_uy, d_uy);
 
   for (int i = 0; i < n_nets; ++i) {
-    gNetStor_[i].setBox(h_lx(i), h_ly(i), h_ux(i), h_uy(i));
+    gNetStor[i].setBox(h_lx(i), h_ly(i), h_ux(i), h_uy(i));
   }
 
   return total_hpwl;

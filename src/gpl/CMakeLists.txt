@@ -34,6 +34,7 @@ add_library(gpl_lib
   src/fft.cpp
   src/fftsg.cpp
   src/fftsg2d.cpp
+  src/hpwl.cpp
   src/routeBase.cpp
   src/timingBase.cpp
   src/graphicsNone.cpp
@@ -41,20 +42,25 @@ add_library(gpl_lib
   src/mbff.cpp
 )
 
-# --- HPWL backend selection (link-time dispatch) ---
-# Exactly one translation unit defines NesterovBaseCommon::getHpwl(): either
-# the OpenMP loop in src/hpwl.cpp (default) or the Kokkos kernel in
-# src/gpu/hpwl.cpp when ENABLE_GPU=ON. CMake enforces ODR; the
-# consumer-facing headers and sources stay free of preprocessor branches.
-# gpu/ is a file-layout subdirectory only (no nested CMakeLists.txt) so
-# kernel build settings stay in this module's CMakeLists with the rest
-# of gpl_lib.
+# --- HPWL backend: runtime switch ---
+# src/hpwl.cpp holds the single NesterovBaseCommon::getHpwl() definition and
+# is always compiled. When ENABLE_GPU=ON, the Kokkos kernel in src/gpu/hpwl.cpp
+# is also compiled in and getHpwl() dispatches between the CPU loop and the GPU
+# kernel at run time (gpl::gpuEnabled(), driven by the ENABLE_GPU env var).
+# ENABLE_GPU is a compile definition gating the #ifdef blocks in gpl_lib's .cpp
+# files; the consumer-facing headers (nesterovBase.h) stay preprocessor-free.
+# gpu/ is a file-layout subdirectory only (no nested CMakeLists.txt) so kernel
+# build settings stay in this module's CMakeLists with the rest of gpl_lib.
 if(ENABLE_GPU)
-  target_sources(gpl_lib PRIVATE src/gpu/hpwl.cpp)
+  target_sources(gpl_lib PRIVATE src/gpu/hpwl.cpp src/gpu/gpuBackend.cpp)
+  target_compile_definitions(gpl_lib PRIVATE ENABLE_GPU)
   # nesterovBase.h and other private gpl headers live in src/; sources
   # under src/gpu/ need that on the include path explicitly because
   # the compiler's default same-dir lookup points into src/gpu/ instead.
   target_include_directories(gpl_lib PRIVATE src)
+  # gpu/hpwl.cpp is the device kernel TU and needs CUDA/HIP-language
+  # compilation. gpu/gpuBackend.cpp is plain C++ (getenv + Kokkos lifecycle
+  # only, no device code) and is left as a CXX TU on purpose.
   if(Kokkos_ENABLE_CUDA)
     set_source_files_properties(src/gpu/hpwl.cpp PROPERTIES LANGUAGE CUDA)
   elseif(Kokkos_ENABLE_HIP)
@@ -74,8 +80,6 @@ if(ENABLE_GPU)
     # so that gpl_lib (and the openroad binary) link against libcudart.
     target_link_libraries(gpl_lib CUDA::cudart)
   endif()
-else()
-  target_sources(gpl_lib PRIVATE src/hpwl.cpp)
 endif()
 
 target_sources(gpl
