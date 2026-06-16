@@ -62,6 +62,10 @@ namespace fin {
 class Finale;
 }
 
+namespace thm {
+class Thermal;
+}
+
 namespace ram {
 class RamGen;
 }
@@ -166,6 +170,7 @@ class OpenRoad
   dbVerilogNetwork* getVerilogNetwork() { return verilog_network_; }
   dpl::Opendp* getOpendp() { return opendp_; }
   fin::Finale* getFinale() { return finale_; }
+  thm::Thermal* getThermal() { return thermal_; }
   ram::RamGen* getRamGen() { return ram_gen_; }
   tap::Tapcell* getTapcell() { return tapcell_; }
   mpl::MacroPlacer* getMacroPlacer() { return macro_placer_; }
@@ -272,6 +277,7 @@ class OpenRoad
   ppl::IOPlacer* ioPlacer_ = nullptr;
   dpl::Opendp* opendp_ = nullptr;
   fin::Finale* finale_ = nullptr;
+  thm::Thermal* thermal_ = nullptr;
   ram::RamGen* ram_gen_ = nullptr;
   mpl::MacroPlacer* macro_placer_ = nullptr;
   exa::Example* example_ = nullptr;

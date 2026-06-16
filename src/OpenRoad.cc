@@ -45,6 +45,8 @@
 #include "exa/example.h"
 #include "fin/Finale.h"
 #include "fin/MakeFinale.h"
+#include "thm/MakeThermal.h"
+#include "thm/Thermal.h"
 #include "gpl/MakeReplace.h"
 #include "gpl/Replace.h"
 #include "grt/GlobalRouter.h"
@@ -144,6 +146,7 @@ OpenRoad::~OpenRoad()
   delete replace_;
   delete pdnsim_;
   delete finale_;
+  delete thermal_;
   delete ram_gen_;
   delete antenna_checker_;
   odb::dbDatabase::destroy(db_);
@@ -240,6 +243,7 @@ void OpenRoad::init(Tcl_Interp* tcl_interp,
                               estimate_parasitics_);
   synthesis_ = new syn::Synthesis(db_, sta_, resizer_, logger_);
   finale_ = new fin::Finale(db_, logger_);
+  thermal_ = new thm::Thermal(db_, logger_);
   restructure_ = new rmp::Restructure(
       logger_, sta_, db_, resizer_, estimate_parasitics_);
   clock_gating_ = new cgt::ClockGating(logger_, sta_);
@@ -296,6 +300,7 @@ void OpenRoad::init(Tcl_Interp* tcl_interp,
   gpl::initReplaceGraphics(replace_, logger_);
   dpl::initOpendp(tcl_interp);
   fin::initFinale(tcl_interp);
+  thm::initThermal(tcl_interp);
   ram::initRamGen(tcl_interp);
   grt::initTcl(tcl_interp);
   cts::initTritonCts(tcl_interp);
