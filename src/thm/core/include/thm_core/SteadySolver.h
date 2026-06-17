@@ -31,6 +31,10 @@ struct Layer
 {
   double thickness_m;            // t_l
   double conductivity_w_per_mk;  // k_l
+  // Volumetric heat capacity rho*c_p [J/(m^3*K)]. Used only by the transient
+  // solver; the steady solver ignores it, so it defaults to 0 and existing
+  // {thickness, conductivity} initializers stay valid.
+  double volumetric_heat_capacity_j_per_m3k = 0.0;
 };
 
 struct SteadyProblem

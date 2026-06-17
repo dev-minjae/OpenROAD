@@ -13,6 +13,7 @@
 add_library(thm_core STATIC
   src/ThermalCore.cpp
   src/SteadySolver.cpp
+  src/TransientSolver.cpp
 )
 
 target_include_directories(thm_core

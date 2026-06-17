@@ -12,17 +12,21 @@
 #include "odb/unfoldedModel.h"
 #include "thm_core/SteadySolver.h"
 #include "thm_core/ThermalCore.h"
+#include "thm_core/TransientSolver.h"
 
 namespace thm {
 
 namespace {
 
-// --- T2 modeling assumptions. odb carries die geometry only (no materials, no
-// --- power), so materials, in-plane grid resolution, boundary temperature and
-// --- power are supplied here. Real per-instance power and a material database
-// --- come later; TSV / microbump compact thermal models are T4. ---
+// --- T2/T3 modeling assumptions. odb carries die geometry only (no materials,
+// --- no power), so materials, in-plane grid resolution, boundary temperature,
+// --- power and volumetric heat capacity are supplied here. Real per-instance
+// --- power and a material database come later; TSV / microbump compact thermal
+// --- models are T4. ---
 constexpr double kSiliconWPerMK = 130.0;   // die bulk silicon (assumption)
 constexpr double kBondWPerMK = 0.8;        // inter-die underfill/bond (assumption)
+constexpr double kSiliconVhc = 2330.0 * 700.0;  // rho*c_p ~ 1.63e6 J/(m^3 K), Si
+constexpr double kBondVhc = 1500.0 * 1000.0;    // rho*c_p ~ 1.5e6 J/(m^3 K), bond
 constexpr int kGridNx = 32;                // in-plane grid resolution (parameter)
 constexpr int kGridNy = 32;
 constexpr double kHeatSinkCelsius = 25.0;  // bottom isothermal BC (parameter)
@@ -100,7 +104,7 @@ bool buildFromOdbStack(odb::dbDatabase* db,
       const long long gap_dbu
           = static_cast<long long>(box.zMin()) - prev_top_dbu;
       if (gap_dbu > 0) {
-        problem.layers.push_back({toMeters(gap_dbu), kBondWPerMK});
+        problem.layers.push_back({toMeters(gap_dbu), kBondWPerMK, kBondVhc});
         is_die_layer.push_back(false);
       } else if (gap_dbu < 0) {
         logger->warn(utl::THM,
@@ -109,7 +113,7 @@ bool buildFromOdbStack(odb::dbDatabase* db,
                      dies[i].name);
       }
     }
-    problem.layers.push_back({toMeters(box.dz()), kSiliconWPerMK});
+    problem.layers.push_back({toMeters(box.dz()), kSiliconWPerMK, kSiliconVhc});
     is_die_layer.push_back(true);
     prev_top_dbu = static_cast<long long>(box.zMin()) + box.dz();
   }
@@ -177,11 +181,11 @@ double analytic1dPeakCelsius(const core::SteadyProblem& p)
 void buildSyntheticStack(core::SteadyProblem& problem)
 {
   problem.layers = {
-      {300e-6, kSiliconWPerMK},  // logic/base die
-      {20e-6, kBondWPerMK},      // underfill / bond
-      {50e-6, kSiliconWPerMK},   // DRAM die
-      {20e-6, kBondWPerMK},      // underfill / bond
-      {50e-6, kSiliconWPerMK},   // DRAM die
+      {300e-6, kSiliconWPerMK, kSiliconVhc},  // logic/base die
+      {20e-6, kBondWPerMK, kBondVhc},         // underfill / bond
+      {50e-6, kSiliconWPerMK, kSiliconVhc},   // DRAM die
+      {20e-6, kBondWPerMK, kBondVhc},         // underfill / bond
+      {50e-6, kSiliconWPerMK, kSiliconVhc},   // DRAM die
   };
   problem.nx = 8;
   problem.ny = 8;
@@ -195,6 +199,32 @@ void buildSyntheticStack(core::SteadyProblem& problem)
   problem.power_w[static_cast<std::size_t>(top) * nxy
                   + (problem.ny / 2) * problem.nx + (problem.nx / 2)]
       = 1.0;
+}
+
+// T3 transient demo: backward-Euler step response of `problem` from a uniform
+// initial temperature, logging the peak at a few sampled times. The final peak
+// should approach the steady peak as total time exceeds the thermal time scale.
+void logTransientDemo(utl::Logger* logger,
+                      const core::SteadyProblem& problem,
+                      double steady_peak_celsius)
+{
+  constexpr double dt = 5e-6;   // 5 us
+  constexpr int steps = 1000;   // -> 5 ms total
+  const core::TransientResult tr
+      = core::solveTransient(problem, dt, steps, problem.t_bc_celsius);
+  const std::vector<double>& h = tr.peak_history_celsius;
+  logger->info(utl::THM,
+               7,
+               "transient: dt = {:.1f} us x {} = {:.2f} ms; peak T(t) {:.3f} -> "
+               "{:.3f} -> {:.3f} -> {:.3f} C (steady {:.3f} C)",
+               dt * 1e6,
+               steps,
+               steps * dt * 1e3,
+               h.front(),
+               h[steps / 10],
+               h[steps / 3],
+               h.back(),
+               steady_peak_celsius);
 }
 
 }  // namespace
@@ -222,9 +252,56 @@ void Thermal::analyzeThermal()
         && buildFromOdbStack(db_, chip, logger_, problem, is_die_layer,
                              num_dies);
 
-  if (!from_odb) {
+  if (from_odb) {
+    logger_->info(utl::THM,
+                  3,
+                  "odb 3D stack: {} dies -> {} layers; grid {}x{}, dx {:.2f} um, "
+                  "dy {:.2f} um, T_bc {:.1f} C",
+                  num_dies,
+                  problem.layers.size(),
+                  problem.nx,
+                  problem.ny,
+                  problem.dx_m * 1e6,
+                  problem.dy_m * 1e6,
+                  problem.t_bc_celsius);
+    for (std::size_t l = 0; l < problem.layers.size(); ++l) {
+      logger_->info(utl::THM,
+                    4,
+                    "  layer {:2d}: {:<4} t = {:7.2f} um, k = {:6.1f} W/m/K",
+                    static_cast<int>(l),
+                    is_die_layer[l] ? "die" : "bond",
+                    problem.layers[l].thickness_m * 1e6,
+                    problem.layers[l].conductivity_w_per_mk);
+    }
+  } else {
     buildSyntheticStack(problem);
-    const core::SteadyResult result = core::solveSteady(problem);
+  }
+
+  const core::SteadyResult result = core::solveSteady(problem);
+
+  if (from_odb) {
+    logger_->info(utl::THM,
+                  5,
+                  "steady FDM: peak T = {:.3f} C, R_th = {:.4f} K/W",
+                  result.peak_celsius,
+                  result.r_th_k_per_w);
+
+    // Independent check (see analytic1dPeakCelsius): for this laterally-uniform
+    // power the solver must match the 1-D resistor ladder to ~machine precision.
+    const double analytic = analytic1dPeakCelsius(problem);
+    const double rise = analytic - problem.t_bc_celsius;
+    const double rel_err
+        = (rise != 0.0)
+              ? std::fabs(result.peak_celsius - analytic) / std::fabs(rise)
+              : 0.0;
+    logger_->info(utl::THM,
+                  6,
+                  "cross-check vs 1D analytic (uniform power): analytic peak "
+                  "{:.4f} C, solver peak {:.4f} C, rel err {:.2e}",
+                  analytic,
+                  result.peak_celsius,
+                  rel_err);
+  } else {
     logger_->info(utl::THM,
                   2,
                   "no odb 3D stack; synthetic {}-layer demo: peak T = {:.3f} C, "
@@ -232,51 +309,9 @@ void Thermal::analyzeThermal()
                   problem.layers.size(),
                   result.peak_celsius,
                   result.r_th_k_per_w);
-    return;
   }
 
-  logger_->info(utl::THM,
-                3,
-                "odb 3D stack: {} dies -> {} layers; grid {}x{}, dx {:.2f} um, "
-                "dy {:.2f} um, T_bc {:.1f} C",
-                num_dies,
-                problem.layers.size(),
-                problem.nx,
-                problem.ny,
-                problem.dx_m * 1e6,
-                problem.dy_m * 1e6,
-                problem.t_bc_celsius);
-  for (std::size_t l = 0; l < problem.layers.size(); ++l) {
-    logger_->info(utl::THM,
-                  4,
-                  "  layer {:2d}: {:<4} t = {:7.2f} um, k = {:6.1f} W/m/K",
-                  static_cast<int>(l),
-                  is_die_layer[l] ? "die" : "bond",
-                  problem.layers[l].thickness_m * 1e6,
-                  problem.layers[l].conductivity_w_per_mk);
-  }
-
-  const core::SteadyResult result = core::solveSteady(problem);
-  logger_->info(utl::THM,
-                5,
-                "steady FDM: peak T = {:.3f} C, R_th = {:.4f} K/W",
-                result.peak_celsius,
-                result.r_th_k_per_w);
-
-  // Independent check (see analytic1dPeakCelsius): for this laterally-uniform
-  // power the solver must match the 1-D resistor ladder to ~machine precision.
-  const double analytic = analytic1dPeakCelsius(problem);
-  const double rise = analytic - problem.t_bc_celsius;
-  const double rel_err
-      = (rise != 0.0) ? std::fabs(result.peak_celsius - analytic) / std::fabs(rise)
-                      : 0.0;
-  logger_->info(utl::THM,
-                6,
-                "cross-check vs 1D analytic (uniform power): analytic peak "
-                "{:.4f} C, solver peak {:.4f} C, rel err {:.2e}",
-                analytic,
-                result.peak_celsius,
-                rel_err);
+  logTransientDemo(logger_, problem, result.peak_celsius);
 }
 
 }  // namespace thm
