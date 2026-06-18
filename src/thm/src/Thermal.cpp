@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -227,6 +228,132 @@ void logTransientDemo(utl::Logger* logger,
                steady_peak_celsius);
 }
 
+// --- T4a: TSV / microbump effective vertical conductivity (docs/50 §6.1).
+// Independently implemented from published mixing rules (parallel rule of
+// mixtures for 1-D vertical conduction); no external tool source was used. ---
+constexpr double kCuWPerMK = 400.0;           // copper
+constexpr double kUnderfillWPerMK = 0.55;     // capillary underfill
+constexpr double kSolderWPerMK = 35.0;        // SnAg microbump
+constexpr double kDielectricWPerMK = 1.4;     // hybrid-bond dielectric
+constexpr double kPi = 3.14159265358979323846;
+
+// Synthetic N-die stack geometry (assumptions; T4 refine).
+constexpr double kBaseDieUm = 100.0;          // base/logic die thickness
+constexpr double kDramDieUm = 50.0;           // stacked DRAM die thickness
+constexpr double kInterDieBondUm = 15.0;      // inter-die bond/underfill gap
+constexpr double kStackFootprintUm = 1000.0;  // square die footprint
+
+enum class BondType
+{
+  kMicrobump,
+  kHybrid
+};
+
+// Areal fill fraction of a square array: f = (pi/4) (d/p)^2.
+double arrayFillFraction(double diameter, double pitch)
+{
+  const double ratio = diameter / pitch;
+  return (kPi / 4.0) * ratio * ratio;
+}
+
+// Vertical effective conductivity of a die layer pierced by a Cu TSV array
+// (parallel rule of mixtures, exact for 1-D vertical conduction).
+double tsvDieKz(double f_tsv)
+{
+  return f_tsv * kCuWPerMK + (1.0 - f_tsv) * kSiliconWPerMK;
+}
+
+// Vertical effective conductivity of the inter-die bond layer:
+//   microbump -> SnAg bumps in underfill
+//   hybrid    -> continuous Cu pads in dielectric (Cu-Cu direct bond)
+double bondKz(BondType type, double fill)
+{
+  if (type == BondType::kHybrid) {
+    return fill * kCuWPerMK + (1.0 - fill) * kDielectricWPerMK;
+  }
+  return fill * kSolderWPerMK + (1.0 - fill) * kUnderfillWPerMK;
+}
+
+struct StackParams
+{
+  int num_dies;
+  BondType bond_type;
+  double tsv_diameter_um;
+  double tsv_pitch_um;
+  double bump_diameter_um;
+  double bump_pitch_um;
+  double hybrid_cu_coverage;
+};
+
+// Build a synthetic N-die HBM-like stack. Heat sink is at the stack bottom
+// (core layer 0), so physical die 0 (base/logic) sits on the sink and the
+// topmost DRAM die -- farthest from the sink -- runs hottest (Option A; see
+// report). die_layer[d] is the core layer index of physical die d (0 = base).
+void buildNDieStack(const StackParams& sp,
+                    core::SteadyProblem& problem,
+                    std::vector<int>& die_layer)
+{
+  const double f_tsv = arrayFillFraction(sp.tsv_diameter_um, sp.tsv_pitch_um);
+  const double f_bond
+      = (sp.bond_type == BondType::kHybrid)
+            ? sp.hybrid_cu_coverage
+            : arrayFillFraction(sp.bump_diameter_um, sp.bump_pitch_um);
+  const double die_k = tsvDieKz(f_tsv);
+  const double bond_k = bondKz(sp.bond_type, f_bond);
+
+  problem.layers.clear();
+  die_layer.assign(sp.num_dies, -1);
+  for (int d = 0; d < sp.num_dies; ++d) {
+    if (d > 0) {  // bond layer between die d-1 and die d
+      problem.layers.push_back({kInterDieBondUm * 1e-6, bond_k, kBondVhc});
+    }
+    const double thickness = ((d == 0) ? kBaseDieUm : kDramDieUm) * 1e-6;
+    die_layer[d] = static_cast<int>(problem.layers.size());
+    problem.layers.push_back({thickness, die_k, kSiliconVhc});
+  }
+
+  problem.nx = kGridNx;
+  problem.ny = kGridNy;
+  problem.dx_m = (kStackFootprintUm * 1e-6) / problem.nx;
+  problem.dy_m = (kStackFootprintUm * 1e-6) / problem.ny;
+  problem.t_bc_celsius = kHeatSinkCelsius;
+
+  // Uniform kPerDieWatts per die spread over its cells; bond layers: no heat.
+  const int nxy = problem.nx * problem.ny;
+  const int nz = static_cast<int>(problem.layers.size());
+  problem.power_w.assign(static_cast<std::size_t>(nxy) * nz, 0.0);
+  for (int d = 0; d < sp.num_dies; ++d) {
+    const int l = die_layer[d];
+    const double per_cell = kPerDieWatts / nxy;
+    for (int c = 0; c < nxy; ++c) {
+      problem.power_w[static_cast<std::size_t>(l) * nxy + c] = per_cell;
+    }
+  }
+}
+
+// Physical die index (0 = base, on sink) with the highest temperature.
+int hottestDie(const core::SteadyResult& result,
+               const std::vector<int>& die_layer,
+               int nxy,
+               double& out_peak_celsius)
+{
+  int hottest = 0;
+  double best = result.temperature_celsius[0];
+  for (int d = 0; d < static_cast<int>(die_layer.size()); ++d) {
+    const std::size_t base = static_cast<std::size_t>(die_layer[d]) * nxy;
+    double layer_peak = result.temperature_celsius[base];
+    for (int c = 1; c < nxy; ++c) {
+      layer_peak = std::max(layer_peak, result.temperature_celsius[base + c]);
+    }
+    if (layer_peak > best) {
+      best = layer_peak;
+      hottest = d;
+    }
+  }
+  out_peak_celsius = best;
+  return hottest;
+}
+
 }  // namespace
 
 Thermal::Thermal(odb::dbDatabase* db, utl::Logger* logger)
@@ -312,6 +439,125 @@ void Thermal::analyzeThermal()
   }
 
   logTransientDemo(logger_, problem, result.peak_celsius);
+}
+
+void Thermal::sweepThermal(const std::string& dies,
+                           double tsv_diameter_um,
+                           double tsv_pitch_um,
+                           double bump_diameter_um,
+                           double bump_pitch_um,
+                           double hybrid_cu_coverage)
+{
+  std::vector<int> stack_sizes;
+  {
+    std::istringstream iss(dies);
+    int n = 0;
+    while (iss >> n) {
+      if (n > 0) {
+        stack_sizes.push_back(n);
+      }
+    }
+  }
+  if (stack_sizes.empty()) {
+    stack_sizes = {12, 16, 20};
+  }
+
+  const double f_tsv = arrayFillFraction(tsv_diameter_um, tsv_pitch_um);
+  const double f_bump = arrayFillFraction(bump_diameter_um, bump_pitch_um);
+  logger_->info(utl::THM,
+                20,
+                "N-die sweep (SYNTHETIC stack, heat sink at bottom): TSV d/p "
+                "{:.1f}/{:.1f} um (f {:.4f}), microbump d/p {:.1f}/{:.1f} um "
+                "(f {:.4f}), hybrid Cu coverage {:.2f}",
+                tsv_diameter_um,
+                tsv_pitch_um,
+                f_tsv,
+                bump_diameter_um,
+                bump_pitch_um,
+                f_bump,
+                hybrid_cu_coverage);
+  logger_->info(utl::THM,
+                21,
+                "effective vertical k_z [W/m/K]: die (Si+TSV) {:.2f}, microbump "
+                "bond {:.2f}, hybrid bond {:.2f}",
+                tsvDieKz(f_tsv),
+                bondKz(BondType::kMicrobump, f_bump),
+                bondKz(BondType::kHybrid, hybrid_cu_coverage));
+
+  bool monotonic = true;
+  double prev_rth = -1.0;
+  for (int n : stack_sizes) {
+    const StackParams sp{n,
+                         BondType::kMicrobump,
+                         tsv_diameter_um,
+                         tsv_pitch_um,
+                         bump_diameter_um,
+                         bump_pitch_um,
+                         hybrid_cu_coverage};
+    core::SteadyProblem problem;
+    std::vector<int> die_layer;
+    buildNDieStack(sp, problem, die_layer);
+    const core::SteadyResult result = core::solveSteady(problem);
+    double peak = 0.0;
+    const int hot
+        = hottestDie(result, die_layer, problem.nx * problem.ny, peak);
+    logger_->info(utl::THM,
+                  22,
+                  "  N {:2d} ({:3d} layers): R_th {:8.4f} K/W, peak T {:8.3f} C, "
+                  "hottest = die {} of {} ({})",
+                  n,
+                  static_cast<int>(problem.layers.size()),
+                  result.r_th_k_per_w,
+                  peak,
+                  hot,
+                  n - 1,
+                  (hot == n - 1) ? "top, farthest from sink" : "interior");
+    if (prev_rth >= 0.0 && result.r_th_k_per_w <= prev_rth) {
+      monotonic = false;
+    }
+    prev_rth = result.r_th_k_per_w;
+  }
+  logger_->info(utl::THM,
+                23,
+                "R_th(N) monotonically increasing with stack height: {}",
+                monotonic ? "yes" : "NO");
+
+  // Microbump vs hybrid bonding at the largest stack.
+  const int n = stack_sizes.back();
+  core::SteadyProblem p_bump, p_hyb;
+  std::vector<int> dl_bump, dl_hyb;
+  buildNDieStack({n,
+                  BondType::kMicrobump,
+                  tsv_diameter_um,
+                  tsv_pitch_um,
+                  bump_diameter_um,
+                  bump_pitch_um,
+                  hybrid_cu_coverage},
+                 p_bump,
+                 dl_bump);
+  buildNDieStack({n,
+                  BondType::kHybrid,
+                  tsv_diameter_um,
+                  tsv_pitch_um,
+                  bump_diameter_um,
+                  bump_pitch_um,
+                  hybrid_cu_coverage},
+                 p_hyb,
+                 dl_hyb);
+  const double rth_bump = core::solveSteady(p_bump).r_th_k_per_w;
+  const double rth_hyb = core::solveSteady(p_hyb).r_th_k_per_w;
+  const double reduction
+      = (rth_bump > 0.0) ? (rth_bump - rth_hyb) / rth_bump * 100.0 : 0.0;
+  logger_->info(utl::THM,
+                24,
+                "bond comparison at N {}: microbump R_th {:.4f}, hybrid R_th "
+                "{:.4f} K/W -> hybrid {:.1f}% lower ({})",
+                n,
+                rth_bump,
+                rth_hyb,
+                reduction,
+                (rth_hyb < rth_bump) ? "hybrid < microbump, expected"
+                                     : "UNEXPECTED");
 }
 
 }  // namespace thm

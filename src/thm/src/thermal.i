@@ -17,4 +17,21 @@ analyze_thermal_cmd()
   thermal->analyzeThermal();
 }
 
+void
+sweep_thermal_cmd(const char* dies,
+                  double tsv_diameter_um,
+                  double tsv_pitch_um,
+                  double bump_diameter_um,
+                  double bump_pitch_um,
+                  double hybrid_cu_coverage)
+{
+  auto* thermal = ord::OpenRoad::openRoad()->getThermal();
+  thermal->sweepThermal(dies,
+                        tsv_diameter_um,
+                        tsv_pitch_um,
+                        bump_diameter_um,
+                        bump_pitch_um,
+                        hybrid_cu_coverage);
+}
+
 %}  // inline
