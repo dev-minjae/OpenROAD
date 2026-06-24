@@ -560,4 +560,81 @@ void Thermal::sweepThermal(const std::string& dies,
                                      : "UNEXPECTED");
 }
 
+void Thermal::dumpThermalStack(int num_dies,
+                               const std::string& bond_type,
+                               double tsv_diameter_um,
+                               double tsv_pitch_um,
+                               double bump_diameter_um,
+                               double bump_pitch_um,
+                               double hybrid_cu_coverage)
+{
+  const BondType bt = (bond_type == "hybrid") ? BondType::kHybrid
+                                              : BondType::kMicrobump;
+  const StackParams sp{num_dies,
+                       bt,
+                       tsv_diameter_um,
+                       tsv_pitch_um,
+                       bump_diameter_um,
+                       bump_pitch_um,
+                       hybrid_cu_coverage};
+  core::SteadyProblem problem;
+  std::vector<int> die_layer;
+  buildNDieStack(sp, problem, die_layer);
+  const core::SteadyResult result = core::solveSteady(problem);
+
+  const int nz = static_cast<int>(problem.layers.size());
+  const int nxy = problem.nx * problem.ny;
+  std::vector<bool> is_die(nz, false);
+  for (const int l : die_layer) {
+    is_die[l] = true;
+  }
+  double total_power = 0.0;
+  for (const double w : problem.power_w) {
+    total_power += w;
+  }
+
+  // Machine-parseable block (grep DUMP_*). Lengths/areas are SI.
+  logger_->info(utl::THM,
+                30,
+                "DUMP_BEGIN n_dies={} n_layers={} footprint_um={:.4f} nx={} "
+                "ny={} t_bc_c={:.4f} total_power_w={:.4f} bond={}",
+                num_dies,
+                nz,
+                problem.dx_m * problem.nx * 1e6,
+                problem.nx,
+                problem.ny,
+                problem.t_bc_celsius,
+                total_power,
+                (bt == BondType::kHybrid) ? "hybrid" : "microbump");
+  for (int l = 0; l < nz; ++l) {
+    double layer_power = 0.0;
+    double peak = result.temperature_celsius[static_cast<std::size_t>(l) * nxy];
+    double sum = 0.0;
+    for (int c = 0; c < nxy; ++c) {
+      const std::size_t idx = static_cast<std::size_t>(l) * nxy + c;
+      peak = std::max(peak, result.temperature_celsius[idx]);
+      sum += result.temperature_celsius[idx];
+      layer_power += problem.power_w[idx];
+    }
+    logger_->info(utl::THM,
+                  31,
+                  "DUMP_LAYER idx={} kind={} thickness_m={:.6e} kz={:.4f} "
+                  "vhc={:.4e} power_w={:.4f} peakT_c={:.4f} meanT_c={:.4f}",
+                  l,
+                  is_die[l] ? "die" : "bond",
+                  problem.layers[l].thickness_m,
+                  problem.layers[l].conductivity_w_per_mk,
+                  problem.layers[l].volumetric_heat_capacity_j_per_m3k,
+                  layer_power,
+                  peak,
+                  sum / nxy);
+  }
+  logger_->info(utl::THM,
+                32,
+                "DUMP_RESULT peak_c={:.4f} rth_kw={:.4f}",
+                result.peak_celsius,
+                result.r_th_k_per_w);
+  logger_->info(utl::THM, 33, "DUMP_END");
+}
+
 }  // namespace thm

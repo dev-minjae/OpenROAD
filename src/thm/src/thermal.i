@@ -34,4 +34,23 @@ sweep_thermal_cmd(const char* dies,
                         hybrid_cu_coverage);
 }
 
+void
+dump_thermal_stack_cmd(int num_dies,
+                       const char* bond_type,
+                       double tsv_diameter_um,
+                       double tsv_pitch_um,
+                       double bump_diameter_um,
+                       double bump_pitch_um,
+                       double hybrid_cu_coverage)
+{
+  auto* thermal = ord::OpenRoad::openRoad()->getThermal();
+  thermal->dumpThermalStack(num_dies,
+                            bond_type,
+                            tsv_diameter_um,
+                            tsv_pitch_um,
+                            bump_diameter_um,
+                            bump_pitch_um,
+                            hybrid_cu_coverage);
+}
+
 %}  // inline

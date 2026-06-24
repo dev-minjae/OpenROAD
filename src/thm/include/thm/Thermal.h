@@ -31,6 +31,17 @@ class Thermal
                     double bump_pitch_um,
                     double hybrid_cu_coverage);
 
+  // T4b: emit a parseable dump (stack definition + solved per-layer
+  // temperatures) of one canonical N-die stack, for the external HotSpot
+  // cross-validation harness. Read-only; no solver-logic change.
+  void dumpThermalStack(int num_dies,
+                        const std::string& bond_type,
+                        double tsv_diameter_um,
+                        double tsv_pitch_um,
+                        double bump_diameter_um,
+                        double bump_pitch_um,
+                        double hybrid_cu_coverage);
+
  private:
   odb::dbDatabase* db_ = nullptr;
   utl::Logger* logger_ = nullptr;
