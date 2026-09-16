@@ -1016,61 +1016,13 @@ void BinGrid::updateBinsGCellDensityArea(const std::vector<GCellHandle>& cells,
     bin.setFillerArea(0);
   }
 
-  // A single scatter implementation for every CPU case, threaded or not, so
-  // that every existing test exercises the code that threaded runs use.
-#ifdef ENABLE_GPU
-  // The device build keeps its pre-existing flat-buffer scatter for threaded
-  // runs: that one is thread-order-dependent, and this change cannot
-  // re-verify the device path.
-  if (parallel_threads > 1) {
-    const int nbins = static_cast<int>(bins_.size());
-    std::vector<float> inst_area(nbins, 0.0f);
-    std::vector<float> filler_area(nbins, 0.0f);
-#pragma omp parallel for num_threads(parallel_threads) schedule(dynamic, 128)
-    for (const GCellHandle& cell : cells) {
-      const std::pair<int, int> pairX = getDensityMinMaxIdxX(cell);
-      const std::pair<int, int> pairY = getDensityMinMaxIdxY(cell);
-      if (cell->isInstance()) {
-        const bool macro = cell->isMacroInstance();
-        if (!macro && !cell->isStdInstance()) {
-          continue;
-        }
-        for (int y = pairY.first; y < pairY.second; y++) {
-          for (int x = pairX.first; x < pairX.second; x++) {
-            const int bi = y * binCntX_ + x;
-            Bin& bin = bins_[bi];
-            float v
-                = getOverlapDensityArea(bin, cell) * cell->getDensityScale();
-            if (macro) {
-              v *= bin.getTargetDensity();
-            }
-#pragma omp atomic
-            inst_area[bi] += v;
-          }
-        }
-      } else if (cell->isFiller()) {
-        for (int y = pairY.first; y < pairY.second; y++) {
-          for (int x = pairX.first; x < pairX.second; x++) {
-            const int bi = y * binCntX_ + x;
-            const float v = getOverlapDensityArea(bins_[bi], cell)
-                            * cell->getDensityScale();
-#pragma omp atomic
-            filler_area[bi] += v;
-          }
-        }
-      }
-    }
-#pragma omp parallel for num_threads(parallel_threads)
-    for (int b = 0; b < nbins; b++) {
-      bins_[b].setInstPlacedAreaUnscaled(inst_area[b]);
-      bins_[b].setFillerArea(filler_area[b]);
-    }
-  } else {
-    scatterDensityAreaInPlace(cells, 1);
-  }
-#else
+  // One scatter implementation for every build and thread count. The bin
+  // accumulators are int64_t, so the in-place atomic scatter is
+  // order-independent (see scatterDensityAreaInPlace); the GPU build no
+  // longer keeps the older thread-order-dependent float flat-buffer path,
+  // which made a GPU-compiled binary's CPU placement differ from the CPU
+  // build's even with the GPU disabled at runtime.
   scatterDensityAreaInPlace(cells, parallel_threads);
-#endif
 
   odb::dbBlock* block = pb_->db()->getChip()->getBlock();
   sumOverflowArea_ = 0;
